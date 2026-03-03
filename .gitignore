@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# Node / SvelteKit
+node_modules/
+.svelte-kit/
+build/
+.output/
+vite.config.*.timestamp-*
+
+# Env
+.env
+.env.*
+!.env.example
+!.env.test
+
+# Misc
+.DS_Store
+Thumbs.db
+*.log
+.vscode/
