@@ -60,7 +60,6 @@
   <div class="panel-header">
     <span class="panel-icon"></span>
     <h2>Mermaid Editor</h2>
-    <span class="panel-hint">Edits render live →</span>
   </div>
   <div class="editor-container" bind:this={editorEl}></div>
 </section>

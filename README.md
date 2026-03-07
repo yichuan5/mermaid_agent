@@ -34,7 +34,7 @@ npm run dev
 |---|---|---|---|
 | `OPENAI_API_KEY` | Yes | — | Your API key |
 | `OPENAI_BASE_URL` | No | OpenAI default | Override for Ollama, Azure, Together, etc. |
-| `OPENAI_MODEL` | No | `gpt-4o` | Model name |
+| `OPENAI_MODEL` | No | `gemini-3-flash-preview` | Model name |
 
 ## Features
 

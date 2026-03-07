@@ -34,12 +34,23 @@
   async function callAI(userMessage: string, contextDiagram: string | null) {
     isLoading = true;
     try {
+      // Build history from existing messages (skip the initial greeting at index 0,
+      // and exclude system messages like auto-fix notifications).
+      // The current user message is already in `messages` when this is called,
+      // so we exclude the last entry too (it's sent as `message`).
+      const history = messages
+        .slice(1, -1) // skip greeting & current message
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-20) // cap to last 20 to avoid huge payloads
+        .map((m) => ({ role: m.role, content: m.content }));
+
       const res = await fetch(`${BACKEND_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage,
           current_diagram: contextDiagram,
+          history,
         }),
       });
       if (!res.ok) {
@@ -76,6 +87,56 @@
   function handleUserSubmit(text: string) {
     messages.push({ role: "user", content: text });
     callAI(text, diagramCode);
+  }
+
+  async function handleImageUpload(file: File, userMessage: string) {
+    // Create a preview URL for the chat message
+    const previewUrl = URL.createObjectURL(file);
+    messages.push({
+      role: "user",
+      content: userMessage || "Convert this image to a Mermaid diagram",
+      imageUrl: previewUrl,
+    });
+
+    isLoading = true;
+    try {
+      const formData = new FormData();
+      formData.append("image", file);
+      formData.append("message", userMessage);
+
+      const res = await fetch(`${BACKEND_URL}/api/chat/image`, {
+        method: "POST",
+        body: formData,
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail ?? `Server error ${res.status}`);
+      }
+
+      const data: {
+        mermaid_code: string | null;
+        explanation: string;
+        needs_clarification: boolean;
+      } = await res.json();
+
+      if (data.needs_clarification) {
+        messages.push({ role: "assistant", content: data.explanation });
+      } else {
+        messages.push({ role: "assistant", content: data.explanation });
+        if (data.mermaid_code) {
+          codeSource = "ai";
+          diagramCode = data.mermaid_code;
+        }
+      }
+    } catch (e: any) {
+      messages.push({
+        role: "assistant",
+        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
+      });
+    } finally {
+      isLoading = false;
+    }
   }
 
   function handleCodeChange(code: string) {
@@ -171,7 +232,12 @@
     bind:this={panelsEl}
     style="grid-template-columns: {widths[0]}% 4px {widths[1]}% 4px {widths[2]}%"
   >
-    <ChatPanel {messages} {isLoading} onSubmit={handleUserSubmit} />
+    <ChatPanel
+      {messages}
+      {isLoading}
+      onSubmit={handleUserSubmit}
+      onImageUpload={handleImageUpload}
+    />
 
     <div
       class="divider"

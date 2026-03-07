@@ -11,6 +11,7 @@ node_modules/
 build/
 .output/
 vite.config.*.timestamp-*
+test-results/
 
 # Env
 .env
@@ -23,3 +24,6 @@ vite.config.*.timestamp-*
 Thumbs.db
 *.log
 .vscode/
+
+# Fetched Mermaid docs (auto-downloaded on startup)
+backend/docs/
