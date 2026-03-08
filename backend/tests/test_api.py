@@ -5,7 +5,7 @@ from unittest.mock import patch, AsyncMock
 
 import pytest
 from fastapi.testclient import TestClient
-from main import app
+from app.main import app
 
 
 @pytest.fixture
@@ -25,9 +25,10 @@ MOCK_LLM = {
 
 # ── POST /api/chat ──────────────────────────────────────────────
 
-
 class TestChatEndpoint:
-    @patch("main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    @patch(
+        "app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
+    )
     def test_valid_request_returns_200(self, mock_ai, client):
         resp = client.post(
             "/api/chat",
@@ -43,7 +44,9 @@ class TestChatEndpoint:
         assert data["explanation"] == MOCK_LLM["explanation"]
         assert data["follow_up_suggestions"] == ["Add more nodes?"]
 
-    @patch("main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    @patch(
+        "app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
+    )
     def test_with_history(self, mock_ai, client):
         resp = client.post(
             "/api/chat",
@@ -81,7 +84,9 @@ class TestChatEndpoint:
 
 
 class TestImageEndpoint:
-    @patch("main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    @patch(
+        "app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
+    )
     def test_valid_png_returns_200(self, mock_ai, client):
         # Create a minimal fake PNG (just needs a valid content type header)
         fake_png = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -94,7 +99,9 @@ class TestImageEndpoint:
         data = resp.json()
         assert data["mermaid_code"] is not None
 
-    @patch("main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    @patch(
+        "app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
+    )
     def test_valid_jpeg_returns_200(self, mock_ai, client):
         fake_jpg = io.BytesIO(b"\xff\xd8\xff" + b"\x00" * 100)
         resp = client.post(

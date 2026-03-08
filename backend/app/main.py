@@ -4,9 +4,9 @@ import base64
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-from services.ai import generate_mermaid, image_to_mermaid
-from services.doc_fetcher import fetch_docs
-from schema import ChatRequest, ChatResponse
+from app.services.agent import generate_mermaid, image_to_mermaid
+from app.services.doc_fetcher import fetch_docs
+from app.schema import ChatRequest, ChatResponse
 import traceback
 
 
@@ -55,7 +55,13 @@ async def chat_image(
 ):
     """Accept an image upload and convert it to a Mermaid diagram."""
     # Validate file type
-    allowed_types = {"image/png", "image/jpeg", "image/webp", "image/heic", "image/heif"}
+    allowed_types = {
+        "image/png",
+        "image/jpeg",
+        "image/webp",
+        "image/heic",
+        "image/heif",
+    }
     if image.content_type not in allowed_types:
         raise HTTPException(
             status_code=400,
@@ -87,4 +93,3 @@ async def chat_image(
 @app.get("/health")
 async def health():
     return {"status": "ok"}
-

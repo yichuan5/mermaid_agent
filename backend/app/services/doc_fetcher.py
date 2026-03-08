@@ -85,7 +85,11 @@ async def fetch_docs(force: bool = False) -> None:
                 tasks.append(_download_file(client, file_info["download_url"], dest))
 
         schema_dest = DOCS_DIR / "config.schema.json"
-        tasks.append(_download_file(client, "https://mermaid.js.org/schemas/config.schema.json", schema_dest))
+        tasks.append(
+            _download_file(
+                client, "https://mermaid.js.org/schemas/config.schema.json", schema_dest
+            )
+        )
 
         if tasks:
             results = await asyncio.gather(*tasks, return_exceptions=True)
