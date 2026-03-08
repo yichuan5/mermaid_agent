@@ -8,13 +8,25 @@
 
   // ── Diagram state ──────────────────────────────────────────────
   let previewComponent: ReturnType<typeof Preview>;
-  let diagramCode = $state(`flowchart TD
-    A[Start] --> B{Ask AI}
-    B --> C[Describe your diagram]
-    C --> D[AI generates Mermaid]
-    D --> E[Edit in editor]
-    E --> F[See live preview]
-    F --> B`);
+  const DEFAULT_DIAGRAM = `---
+config:
+  look: handDrawn
+---
+flowchart TD
+    Start([Start])
+    Start --> Describe[Describe Diagram]
+    Start --> Upload[Upload Image]
+
+    Describe --> AI[[AI Agent]]
+    Upload --> AI
+
+    AI --> Code[Mermaid Code]
+    Code --> Preview[Live Preview]
+
+    %% Feedback Loops
+    Code -- "iterate/feedback" --> AI`;
+
+  let diagramCode = $state(DEFAULT_DIAGRAM);
 
   // Track where the current code came from: only auto-fix AI output
   let codeSource: "ai" | "user" = "user";
@@ -35,15 +47,15 @@
   async function callAI(userMessage: string, contextDiagram: string | null) {
     isLoading = true;
     try {
-      // Build history from existing messages (skip the initial greeting at index 0,
-      // and exclude system messages like auto-fix notifications).
-      // The current user message is already in `messages` when this is called,
-      // so we exclude the last entry too (it's sent as `message`).
       const history = messages
         .slice(1, -1) // skip greeting & current message
         .filter((m) => m.role === "user" || m.role === "assistant")
         .slice(-20) // cap to last 20 to avoid huge payloads
         .map((m) => ({ role: m.role, content: m.content }));
+
+      if (contextDiagram === DEFAULT_DIAGRAM) {
+        contextDiagram = null;
+      }
 
       let current_diagram_image = null;
       if (previewComponent && contextDiagram) {

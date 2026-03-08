@@ -1,4 +1,5 @@
 import os
+import json
 import logging
 from pathlib import Path
 from dotenv import load_dotenv
@@ -7,7 +8,9 @@ from typing import Literal
 from pydantic_ai import Agent, RunContext
 from pydantic_ai.models.openai import OpenAIModel
 from pydantic_ai.providers.openai import OpenAIProvider
-from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart, ImageUrl
+from pydantic_ai.models.google import GoogleModel
+from pydantic_ai.providers.google import GoogleProvider
+from pydantic_ai.messages import ModelMessage, ModelRequest, UserPromptPart, ImageUrl, BinaryContent
 from schema import ChatResponse, HistoryMessage
 from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT
 
@@ -28,16 +31,8 @@ print(f"[ai] Using model: {MODEL}")
 print(f"[ai] Base URL: {BASE_URL or 'default OpenAI'}")
 print(f"[ai] API key loaded: {'yes' if API_KEY else 'NO - check .env!'}")
 
-# Configure the LLM using Pydantic AI's OpenAIProvider
-provider = OpenAIProvider(
-    base_url=BASE_URL,
-    api_key=API_KEY,
-)
-
-llm = OpenAIModel(
-    model_name=MODEL,
-    provider=provider,
-)
+provider = GoogleProvider(api_key=API_KEY)
+llm = GoogleModel(model_name=MODEL, provider=provider)
 
 DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid" / "syntax"
 
@@ -75,6 +70,65 @@ def read_mermaid_syntax(ctx: RunContext[None], diagram_type: DiagramType) -> str
     
     return f"Documentation for '{diagram_type}' not found. Please select a valid diagram type."
 
+def _resolve_schema_refs(schema: dict, obj: dict | list | str | int | float | bool | None, depth: int = 0) -> any:
+    """Recursively resolve $ref pointers in a JSON schema."""
+    if depth > 5:  # Prevent infinite recursion just in case
+        return obj
+    
+    if isinstance(obj, dict):
+        if "$ref" in obj:
+            ref_path = obj["$ref"]
+            if ref_path.startswith("#/$defs/"):
+                def_name = ref_path.split("/")[-1]
+                resolved_def = schema.get("$defs", {}).get(def_name, {})
+                # Merge the resolved properties with any other properties on this level
+                merged = {k: v for k, v in obj.items() if k != "$ref"}
+                merged.update(resolved_def)
+                return _resolve_schema_refs(schema, merged, depth + 1)
+            return obj # Unsupported ref format
+        
+        return {k: _resolve_schema_refs(schema, v, depth + 1) for k, v in obj.items()}
+    elif isinstance(obj, list):
+        return [_resolve_schema_refs(schema, item, depth + 1) for item in obj]
+    else:
+        return obj
+
+@mermaid_agent.tool
+def read_mermaid_config(ctx: RunContext[None], property_name: str | None = None) -> str:
+    """Fetch the Mermaid configuration schema. If property_name is None, returns a summary of all top-level properties. If property_name is provided, returns the detailed, fully-resolved schema for that specific property."""
+    logger.info("Agent requested Mermaid config schema (property_name=%r)", property_name)
+    
+    path = DOCS_DIR.parent / "config.schema.json"
+    if not path.exists():
+        return "Configuration schema not found locally."
+        
+    try:
+        schema = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return "Failed to parse the configuration schema JSON."
+
+    properties = schema.get("properties", {})
+    
+    if not property_name:
+        # Provide a summarized list of all root properties
+        summary = ["Top-level Mermaid configuration properties:"]
+        for prop, details in properties.items():
+            desc = details.get("description", "").split("\n")[0]
+            if desc:
+                summary.append(f"- {prop}: {desc}")
+            else:
+                summary.append(f"- {prop}")
+        summary.append("\nCall this tool again with `property_name='<prop_name>'` to get the full schema for a specific property (e.g. `property_name='flowchart'`).")
+        return "\n".join(summary)
+        
+    if property_name not in properties:
+        return f"Property '{property_name}' not found in the root configuration schema."
+        
+    # Resolve any $refs so the agent doesn't get useless pointers
+    resolved_prop = _resolve_schema_refs(schema, properties[property_name])
+    
+    return json.dumps({property_name: resolved_prop}, indent=2)
+
 async def generate_mermaid(
     message: str,
     current_diagram: str | None = None,
@@ -96,14 +150,16 @@ async def generate_mermaid(
 
     user_prompt = ""
     if current_diagram:
-        user_prompt += f"Here is the current diagram:\n\n```mermaid\n{current_diagram}\n```\n\n"
+        user_prompt += f"Here is the current diagram code:\n\n```mermaid\n{current_diagram}\n```\n\n"
+        if current_diagram_image:
+            user_prompt += "The attached image is the rendered output of this current diagram code.\n\n"
     
     user_prompt += f"User Request: {message}"
     
     prompt_parts = [user_prompt]
     if current_diagram_image:
         image_url = f"data:image/png;base64,{current_diagram_image}"
-        prompt_parts.append(ImageUrl(url=image_url))
+        prompt_parts.append(BinaryContent.from_data_uri(image_url))
 
     result = await mermaid_agent.run(
         user_prompt=prompt_parts,
@@ -123,6 +179,7 @@ convert_agent = Agent(
 
 # Share the same documentation fetcher tool
 convert_agent.tool(read_mermaid_syntax)
+convert_agent.tool(read_mermaid_config)
 
 async def image_to_mermaid(
     image_base64: str,
@@ -140,7 +197,7 @@ async def image_to_mermaid(
     # Construct a multimodal user prompt using Pydantic AI's structure
     prompt_parts = [
         user_message if user_message.strip() else "Please reproduce this image as a Mermaid diagram.",
-        ImageUrl(url=image_url),
+        BinaryContent.from_data_uri(image_url),
     ]
 
     result = await convert_agent.run(
