@@ -10,15 +10,15 @@ from pathlib import Path
 DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid"
 
 GITHUB_API_BASE = "https://api.github.com/repos/mermaid-js/mermaid/contents"
-GITHUB_REF = "develop"
+GITHUB_REF = "mermaid@11.12.3"
 
 # Directories to fetch from the Mermaid repo
-DOC_PATHS = ["docs/syntax", "docs/intro", "docs/config"]
+DOC_PATHS = ["docs/syntax"]
 
 
 def docs_exist() -> bool:
     """Check if docs have already been fetched."""
-    return DOCS_DIR.exists() and any(DOCS_DIR.glob("*.md"))
+    return DOCS_DIR.exists() and any(DOCS_DIR.glob("**/*.md"))
 
 
 async def _list_md_files(client: httpx.AsyncClient, repo_path: str) -> list[dict]:

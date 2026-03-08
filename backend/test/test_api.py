@@ -19,7 +19,7 @@ def client():
 MOCK_AI_RESULT = {
     "mermaid_code": "flowchart TD\n    A --> B",
     "explanation": "A simple diagram.",
-    "needs_clarification": False,
+    "follow_up_suggestions": ["Add more nodes?"],
 }
 
 
@@ -38,7 +38,7 @@ class TestChatEndpoint:
         data = resp.json()
         assert data["mermaid_code"] == MOCK_AI_RESULT["mermaid_code"]
         assert data["explanation"] == MOCK_AI_RESULT["explanation"]
-        assert data["needs_clarification"] is False
+        assert data["follow_up_suggestions"] == ["Add more nodes?"]
 
     @patch("main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_AI_RESULT)
     def test_with_history(self, mock_ai, client):
@@ -53,7 +53,7 @@ class TestChatEndpoint:
         assert resp.status_code == 200
         # Verify the history was passed through to generate_mermaid
         call_args = mock_ai.call_args
-        assert len(call_args[0][2]) == 2  # 2 history messages
+        assert len(call_args.kwargs["history"]) == 2  # 2 history messages
 
     def test_empty_message_returns_400(self, client):
         resp = client.post("/api/chat", json={

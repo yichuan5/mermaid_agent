@@ -10,6 +10,57 @@
     onRenderError?: (code: string, error: string) => void;
   } = $props();
 
+  export async function getDiagramImageBase64(): Promise<string | null> {
+    const svgEl = wrapperEl?.querySelector("svg");
+    if (!svgEl) return null;
+
+    // Clone the SVG so we can modify it without affecting the live preview
+    const clone = svgEl.cloneNode(true) as SVGSVGElement;
+
+    // Inline all computed styles so text/colors render in the <img> context
+    inlineStyles(svgEl, clone);
+
+    // Determine real pixel dimensions from the rendered SVG
+    const bbox = svgEl.getBoundingClientRect();
+    const w = Math.ceil(bbox.width);
+    const h = Math.ceil(bbox.height);
+
+    // Set explicit width/height (required for canvas rendering)
+    clone.setAttribute("width", `${w}`);
+    clone.setAttribute("height", `${h}`);
+
+    // Serialise and encode as base64 data URL (more reliable than blob URL for canvas)
+    const svgData = new XMLSerializer().serializeToString(clone);
+    const bytes = new TextEncoder().encode(svgData);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+    const dataUrl = `data:image/svg+xml;base64,${base64}`;
+
+    const scale = 2; // 2× for crisp output
+
+    return new Promise((resolve) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement("canvas");
+        canvas.width = w * scale;
+        canvas.height = h * scale;
+        const ctx = canvas.getContext("2d")!;
+        ctx.scale(scale, scale);
+        ctx.fillStyle = previewDark ? "#0f1117" : "#ffffff";
+        ctx.fillRect(0, 0, w, h);
+        ctx.drawImage(img, 0, 0, w, h);
+        // We only want the base64 string without the data:image/png;base64, prefix
+        const dataUrl = canvas.toDataURL("image/png");
+        resolve(dataUrl.split(",")[1]);
+      };
+      img.onerror = () => resolve(null);
+      img.src = dataUrl;
+    });
+  }
+
   let wrapperEl: HTMLDivElement; // the scaled/translated diagram
   let containerEl: HTMLDivElement; // the clipping viewport
   let renderError = $state("");
@@ -86,31 +137,11 @@
   const darkThemeConfig = {
     startOnLoad: false,
     theme: "dark" as const,
-    themeVariables: {
-      darkMode: true,
-      background: "#0f1117",
-      primaryColor: "#6366f1",
-      primaryTextColor: "#e2e8f0",
-      primaryBorderColor: "#4f46e5",
-      lineColor: "#818cf8",
-      secondaryColor: "#1e1b4b",
-      tertiaryColor: "#1e293b",
-    },
   };
 
   const lightThemeConfig = {
     startOnLoad: false,
     theme: "default" as const,
-    themeVariables: {
-      darkMode: false,
-      background: "#ffffff",
-      primaryColor: "#6366f1",
-      primaryTextColor: "#1e293b",
-      primaryBorderColor: "#4f46e5",
-      lineColor: "#6366f1",
-      secondaryColor: "#e0e7ff",
-      tertiaryColor: "#f1f5f9",
-    },
   };
 
   function initMermaid(dark: boolean) {
@@ -123,17 +154,14 @@
     svgEl.style.height = "auto";
     svgEl.style.display = "block";
     svgEl.style.overflow = "visible";
-
     const vb = svgEl.getAttribute("viewBox");
     if (vb) {
-      const parts = vb.split(/[\s,]+/).map(Number);
-      if (parts.length === 4) {
-        const pad = 20;
+      const [x, y, w, h] = vb.split(/[\s,]+/).map(Number);
+      if ([x, y, w, h].every(isFinite))
         svgEl.setAttribute(
           "viewBox",
-          `${parts[0] - pad} ${parts[1] - pad} ${parts[2] + pad * 2} ${parts[3] + pad * 2}`,
+          `${x - 20} ${y - 20} ${w + 40} ${h + 40}`,
         );
-      }
     }
   }
 
@@ -159,27 +187,11 @@
   function togglePreviewMode() {
     previewDark = !previewDark;
     initMermaid(previewDark);
-    // Force an immediate re-render with the new theme
-    if (wrapperEl && code.trim()) {
-      clearTimeout(debounceTimer);
-      (async () => {
-        try {
-          renderError = "";
-          const id = `mermaid-${++renderCount}`;
-          const { svg } = await mermaid.render(id, code);
-          wrapperEl.innerHTML = svg;
-          const svgEl = wrapperEl.querySelector("svg");
-          if (svgEl) fixSvgClipping(svgEl);
-        } catch (e: any) {
-          renderError = e?.message ?? "Invalid Mermaid syntax";
-        }
-      })();
-    }
+    renderDiagram(code);
   }
 
   onMount(() => {
     initMermaid(previewDark);
-    renderDiagram(code);
   });
   $effect(() => {
     renderDiagram(code);
@@ -195,49 +207,14 @@
     showDownloadMenu = false;
   }
 
-  function downloadPNG() {
-    const svgEl = wrapperEl?.querySelector("svg");
-    if (!svgEl) return;
+  async function downloadPNG() {
+    const base64 = await getDiagramImageBase64();
+    if (!base64) return;
 
-    // Clone the SVG so we can modify it without affecting the live preview
-    const clone = svgEl.cloneNode(true) as SVGSVGElement;
-
-    // Inline all computed styles so text/colors render in the <img> context
-    inlineStyles(svgEl, clone);
-
-    // Determine real pixel dimensions from the rendered SVG
-    const bbox = svgEl.getBoundingClientRect();
-    const w = Math.ceil(bbox.width);
-    const h = Math.ceil(bbox.height);
-
-    // Set explicit width/height (required for canvas rendering)
-    clone.setAttribute("width", `${w}`);
-    clone.setAttribute("height", `${h}`);
-
-    // Serialise and encode as base64 data URL (more reliable than blob URL for canvas)
-    const svgData = new XMLSerializer().serializeToString(clone);
-    const base64 = btoa(
-      String.fromCharCode(...new TextEncoder().encode(svgData)),
-    );
-    const dataUrl = `data:image/svg+xml;base64,${base64}`;
-
-    const scale = 2; // 2× for crisp output
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement("canvas");
-      canvas.width = w * scale;
-      canvas.height = h * scale;
-      const ctx = canvas.getContext("2d")!;
-      ctx.scale(scale, scale);
-      // Fill background (transparent looks odd in most apps)
-      ctx.fillStyle = previewDark ? "#0f1117" : "#ffffff";
-      ctx.fillRect(0, 0, w, h);
-      ctx.drawImage(img, 0, 0, w, h);
-      canvas.toBlob((blob) => {
-        if (blob) triggerDownload(blob, "diagram.png");
-      }, "image/png");
-    };
-    img.src = dataUrl;
+    // convert base64 back to blob for download
+    const res = await fetch(`data:image/png;base64,${base64}`);
+    const blob = await res.blob();
+    triggerDownload(blob, "diagram.png");
     showDownloadMenu = false;
   }
 

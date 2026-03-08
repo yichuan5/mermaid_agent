@@ -7,6 +7,7 @@
   const BACKEND_URL = "http://localhost:8000";
 
   // ── Diagram state ──────────────────────────────────────────────
+  let previewComponent: ReturnType<typeof Preview>;
   let diagramCode = $state(`flowchart TD
     A[Start] --> B{Ask AI}
     B --> C[Describe your diagram]
@@ -44,12 +45,18 @@
         .slice(-20) // cap to last 20 to avoid huge payloads
         .map((m) => ({ role: m.role, content: m.content }));
 
+      let current_diagram_image = null;
+      if (previewComponent && contextDiagram) {
+        current_diagram_image = await previewComponent.getDiagramImageBase64();
+      }
+
       const res = await fetch(`${BACKEND_URL}/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           message: userMessage,
           current_diagram: contextDiagram,
+          current_diagram_image,
           history,
         }),
       });
@@ -60,18 +67,18 @@
       const data: {
         mermaid_code: string | null;
         explanation: string;
-        needs_clarification: boolean;
+        follow_up_suggestions: string[];
       } = await res.json();
 
-      if (data.needs_clarification) {
-        // Agent decided it needs more info — show the question, don't update diagram
-        messages.push({ role: "assistant", content: `${data.explanation}` });
-      } else {
-        messages.push({ role: "assistant", content: data.explanation });
-        if (data.mermaid_code) {
-          codeSource = "ai";
-          diagramCode = data.mermaid_code;
-        }
+      messages.push({
+        role: "assistant",
+        content: data.explanation,
+        followUpSuggestions: data.follow_up_suggestions,
+      });
+
+      if (data.mermaid_code) {
+        codeSource = "ai";
+        diagramCode = data.mermaid_code;
       }
     } catch (e: any) {
       messages.push({
@@ -117,17 +124,18 @@
       const data: {
         mermaid_code: string | null;
         explanation: string;
-        needs_clarification: boolean;
+        follow_up_suggestions: string[];
       } = await res.json();
 
-      if (data.needs_clarification) {
-        messages.push({ role: "assistant", content: data.explanation });
-      } else {
-        messages.push({ role: "assistant", content: data.explanation });
-        if (data.mermaid_code) {
-          codeSource = "ai";
-          diagramCode = data.mermaid_code;
-        }
+      messages.push({
+        role: "assistant",
+        content: data.explanation,
+        followUpSuggestions: data.follow_up_suggestions,
+      });
+
+      if (data.mermaid_code) {
+        codeSource = "ai";
+        diagramCode = data.mermaid_code;
       }
     } catch (e: any) {
       messages.push({
@@ -257,6 +265,10 @@
       aria-label="Resize editor and preview panels"
     ></div>
 
-    <Preview code={diagramCode} onRenderError={handleRenderError} />
+    <Preview
+      bind:this={previewComponent}
+      code={diagramCode}
+      onRenderError={handleRenderError}
+    />
   </main>
 </div>

@@ -65,9 +65,15 @@
     if (!file) return;
 
     // Validate type
-    const allowed = ["image/png", "image/jpeg", "image/webp", "image/gif"];
+    const allowed = [
+      "image/png",
+      "image/jpeg",
+      "image/webp",
+      "image/heic",
+      "image/heif",
+    ];
     if (!allowed.includes(file.type)) {
-      alert("Please upload a PNG, JPEG, WebP, or GIF image.");
+      alert("Please upload a PNG, JPEG, WebP, HEIC, or HEIF image.");
       return;
     }
     if (file.size > 1 * 1024 * 1024) {
@@ -113,6 +119,19 @@
           {/if}
           {msg.content}
         </div>
+        {#if msg.followUpSuggestions && msg.followUpSuggestions.length > 0}
+          <div class="suggestion-chips">
+            {#each msg.followUpSuggestions as suggestion}
+              <button
+                class="suggestion-chip"
+                onclick={() => onSubmit(suggestion)}
+                disabled={isLoading}
+              >
+                {suggestion}
+              </button>
+            {/each}
+          </div>
+        {/if}
       </div>
     {/each}
     {#if isLoading}
@@ -181,8 +200,8 @@
       bind:value={inputText}
       onkeydown={handleKeydown}
       placeholder={pendingImage
-        ? "Add instructions (optional)… then press Enter"
-        : "Describe a diagram… (Enter to send)"}
+        ? "Add instructions (optional)…"
+        : "Describe a diagram or upload an image…"}
       rows="3"
       disabled={isLoading}
     ></textarea>
@@ -196,8 +215,8 @@
         title="Upload an image to convert to Mermaid"
       >
         <svg
-          width="18"
-          height="18"
+          width="25"
+          height="25"
           viewBox="0 0 24 24"
           fill="none"
           stroke="currentColor"
