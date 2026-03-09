@@ -26,12 +26,10 @@ logging.basicConfig(
 # Always load .env from the backend/ directory, regardless of cwd
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
-MODEL = os.getenv("OPENAI_MODEL", "gemini-3-flash-preview")
-BASE_URL = os.getenv("OPENAI_BASE_URL")
-API_KEY = os.getenv("OPENAI_API_KEY")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+API_KEY = os.getenv("GEMINI_API_KEY")
 
 print(f"[llm] Using model: {MODEL}")
-print(f"[llm] Base URL: {BASE_URL or 'default OpenAI'}")
 print(f"[llm] API key loaded: {'yes' if API_KEY else 'NO - check .env!'}")
 
 provider = GoogleProvider(api_key=API_KEY)

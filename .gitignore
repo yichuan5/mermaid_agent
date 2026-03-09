@@ -26,4 +26,4 @@ Thumbs.db
 .vscode/
 
 # Fetched Mermaid docs (auto-downloaded on startup)
-backend/docs/
+backend/app/docs/
