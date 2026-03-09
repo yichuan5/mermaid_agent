@@ -7,7 +7,7 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 test('sending a message displays AI response and renders a diagram', async ({ page }) => {
     // ── Mock the backend API ─────────────────────────────────────
-    await page.route('http://localhost:8000/api/chat', (route) =>
+    await page.route('**/api/chat', (route) =>
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -48,7 +48,7 @@ test('sending a message displays AI response and renders a diagram', async ({ pa
 
 test('shows error message when backend is down', async ({ page }) => {
     // ── Mock the backend to simulate a network failure ──────────
-    await page.route('http://localhost:8000/api/chat', (route) =>
+    await page.route('**/api/chat', (route) =>
         route.abort('connectionrefused'),
     );
 
@@ -74,7 +74,7 @@ test('shows error message when backend is down', async ({ page }) => {
 
 test('image upload generates a diagram', async ({ page }) => {
     // ── Mock the image upload endpoint ──────────────────────────
-    await page.route('http://localhost:8000/api/chat/image', (route) =>
+    await page.route('**/api/chat/image', (route) =>
         route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -128,7 +128,7 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
     let requestsCount = 0;
 
     // ── Mock the backend to always return invalid Mermaid code ────
-    await page.route('http://localhost:8000/api/chat', (route) => {
+    await page.route('**/api/chat', (route) => {
         requestsCount++;
         // Return a broken flowchart diagram (make it different each time so it doesn't trigger the identical-code abort)
         return route.fulfill({

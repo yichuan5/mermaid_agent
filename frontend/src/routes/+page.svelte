@@ -4,8 +4,6 @@
   import Preview from "$lib/Preview.svelte";
   import type { Message } from "$lib/types";
 
-  const BACKEND_URL = "http://localhost:8000";
-
   // ── Diagram state ──────────────────────────────────────────────
   let previewComponent: ReturnType<typeof Preview>;
   const DEFAULT_DIAGRAM = `---
@@ -69,7 +67,7 @@ flowchart TD
         current_diagram_image = await previewComponent.getDiagramImageBase64();
       }
 
-      const res = await fetch(`${BACKEND_URL}/api/chat`, {
+      const res = await fetch(`/api/chat`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -140,7 +138,7 @@ flowchart TD
       formData.append("image", file);
       formData.append("message", userMessage);
 
-      const res = await fetch(`${BACKEND_URL}/api/chat/image`, {
+      const res = await fetch(`/api/chat/image`, {
         method: "POST",
         body: formData,
       });
