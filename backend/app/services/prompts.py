@@ -15,7 +15,7 @@ Diagram rules:
 Process:
 1. If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
 2. If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
-3. Return the Mermaid code, a brief explanation, and a few helpful follow-up suggestions.
+3. Return the Mermaid code, a brief explanation, and a few specific actionable follow-up commands to improve the diagram.
 """
 
 IMAGE_TO_MERMAID_PROMPT = """\
@@ -34,5 +34,5 @@ Instructions:
 Process:
 1. If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
 2. If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
-3. Return the Mermaid code, a brief explanation, and a few helpful follow-up suggestions.
+3. Return the Mermaid code, a brief explanation, and a few specific actionable follow-up commands to improve the diagram.
 """

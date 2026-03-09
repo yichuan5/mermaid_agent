@@ -19,7 +19,7 @@ def client():
 MOCK_LLM = {
     "mermaid_code": "flowchart TD\n    A --> B",
     "explanation": "A simple diagram.",
-    "follow_up_suggestions": ["Add more nodes?"],
+    "follow_up_commands": ["Add more nodes?"],
 }
 
 
@@ -42,7 +42,7 @@ class TestChatEndpoint:
         data = resp.json()
         assert data["mermaid_code"] == MOCK_LLM["mermaid_code"]
         assert data["explanation"] == MOCK_LLM["explanation"]
-        assert data["follow_up_suggestions"] == ["Add more nodes?"]
+        assert data["follow_up_commands"] == ["Add more nodes?"]
 
     @patch(
         "app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM

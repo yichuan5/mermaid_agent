@@ -79,13 +79,13 @@ flowchart TD
       const data: {
         mermaid_code: string | null;
         explanation: string;
-        follow_up_suggestions: string[];
+        follow_up_commands: string[];
       } = await res.json();
 
       messages.push({
         role: "assistant",
         content: data.explanation,
-        followUpSuggestions: data.follow_up_suggestions,
+        followUpSuggestions: data.follow_up_commands,
       });
 
       if (data.mermaid_code) {
@@ -136,13 +136,13 @@ flowchart TD
       const data: {
         mermaid_code: string | null;
         explanation: string;
-        follow_up_suggestions: string[];
+        follow_up_commands: string[];
       } = await res.json();
 
       messages.push({
         role: "assistant",
         content: data.explanation,
-        followUpSuggestions: data.follow_up_suggestions,
+        followUpSuggestions: data.follow_up_commands,
       });
 
       if (data.mermaid_code) {

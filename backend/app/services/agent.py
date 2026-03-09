@@ -35,7 +35,7 @@ print(f"[llm] API key loaded: {'yes' if API_KEY else 'NO - check .env!'}")
 provider = GoogleProvider(api_key=API_KEY)
 llm = GoogleModel(model_name=MODEL, provider=provider)
 
-DOCS_DIR = Path(__file__).parent.parent.parent / "docs" / "mermaid" / "syntax"
+DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid" / "syntax"
 
 DiagramType = Literal[
     "architecture",
