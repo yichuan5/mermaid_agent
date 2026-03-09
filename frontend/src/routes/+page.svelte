@@ -31,6 +31,8 @@ flowchart TD
   // Track where the current code came from: only auto-fix AI output
   let codeSource: "ai" | "user" = "user";
   let autoFixPending = false; // debounce: only one auto-fix at a time
+  let autoFixCount = 0;
+  const MAX_AUTO_FIX = 3;
 
   // ── Chat state ─────────────────────────────────────────────────
 
@@ -44,7 +46,12 @@ flowchart TD
   let isLoading = $state(false);
 
   // ── AI call ────────────────────────────────────────────────────
-  async function callAI(userMessage: string, contextDiagram: string | null) {
+  async function callAI(
+    userMessage: string,
+    contextDiagram: string | null,
+    isAutoFix = false,
+  ) {
+    if (!isAutoFix) autoFixCount = 0;
     isLoading = true;
     try {
       const history = messages
@@ -89,8 +96,17 @@ flowchart TD
       });
 
       if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
+        if (isAutoFix && data.mermaid_code === diagramCode) {
+          messages.push({
+            role: "system",
+            content:
+              "The AI returned the exact same broken code. Auto-fix aborted. Please provide more context or fix the code manually.",
+          });
+          autoFixCount = MAX_AUTO_FIX; // Stop further auto-fixing
+        } else {
+          codeSource = "ai";
+          diagramCode = data.mermaid_code;
+        }
       }
     } catch (e: any) {
       messages.push({
@@ -109,6 +125,7 @@ flowchart TD
   }
 
   async function handleImageUpload(file: File, userMessage: string) {
+    autoFixCount = 0; // reset on manual upload
     // Create a preview URL for the chat message
     const previewUrl = URL.createObjectURL(file);
     messages.push({
@@ -172,11 +189,24 @@ flowchart TD
   function handleRenderError(code: string, error: string) {
     // Only auto-fix if the broken code came from the AI, and no fix is in flight
     if (codeSource !== "ai" || autoFixPending || isLoading) return;
+
+    if (autoFixCount >= MAX_AUTO_FIX) {
+      if (autoFixCount === MAX_AUTO_FIX) {
+        messages.push({
+          role: "system",
+          content: `Auto-fix limit reached (${MAX_AUTO_FIX} attempts). Please fix the code manually.`,
+        });
+        autoFixCount++; // Increment so we only show the max limit message once
+      }
+      return;
+    }
+
     autoFixPending = true;
+    autoFixCount++;
 
     messages.push({
       role: "system",
-      content: `Rendering error detected — asking AI to fix it automatically…\n\`${error.split("\n")[0]}\``,
+      content: `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
     });
 
     const fixPrompt =
@@ -184,7 +214,7 @@ flowchart TD
       `Error: ${error}\n\n` +
       `Please fix the syntax and return corrected Mermaid code.`;
 
-    callAI(fixPrompt, code).finally(() => {
+    callAI(fixPrompt, code, true).finally(() => {
       autoFixPending = false;
     });
   }

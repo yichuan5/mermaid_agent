@@ -123,3 +123,49 @@ test('image upload generates a diagram', async ({ page }) => {
     // Cleanup
     unlinkSync(testImagePath);
 });
+
+test('stops auto-fixing after max retries when code is invalid', async ({ page }) => {
+    let requestsCount = 0;
+
+    // ── Mock the backend to always return invalid Mermaid code ────
+    await page.route('http://localhost:8000/api/chat', (route) => {
+        requestsCount++;
+        // Return a broken flowchart diagram (make it different each time so it doesn't trigger the identical-code abort)
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: `flowchart TD\n    A[Hello] -- Broken ${requestsCount}`, // invalid syntax
+                explanation: 'Here is your diagram.',
+                follow_up_commands: [],
+                needs_clarification: false,
+            }),
+        });
+    });
+
+    await page.goto('/');
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // ── Send a message ──────────────────────────────────────────
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a flowchart');
+    await page.locator('#chat-send-btn').click();
+
+    // The first response triggers the first render error, which triggers auto-fix 1.
+    // The auto-fix 1 returns broken code, triggers auto-fix 2.
+    // The auto-fix 2 returns broken code, triggers auto-fix 3.
+    // The auto-fix 3 returns broken code, which triggers the max limit message.
+
+    // ── Assert the final max limit system message appears ─────────
+    const systemMessage = page.locator('.message.system .message-bubble').last();
+    await expect(systemMessage).toContainText(
+        'Auto-fix limit reached (3 attempts). Please fix the code manually.',
+        { timeout: 15_000 }
+    );
+
+    // Initial request + 3 auto-fixes = 4 requests to the backend
+    expect(requestsCount).toBe(4);
+});

@@ -10,6 +10,7 @@ Diagram rules:
    config:
      look: handDrawn
      layout: elk
+     theme: default
    ---
 
 Process:
