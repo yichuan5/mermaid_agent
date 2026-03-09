@@ -30,7 +30,7 @@ test('sending a message displays AI response and renders a diagram', async ({ pa
     // ── Send a chat message ──────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
     await textarea.fill('Draw a simple hello world flowchart');
-    await textarea.press('Enter');
+    await page.locator('#chat-send-btn').click();
 
     // ── Assert the AI response appears in the chat ───────────────
     await expect(
@@ -61,7 +61,7 @@ test('shows error message when backend is down', async ({ page }) => {
     // ── Send a message ──────────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
     await textarea.fill('Make me a diagram');
-    await textarea.press('Enter');
+    await page.locator('#chat-send-btn').click();
 
     // ── Assert an error message appears ─────────────────────────
     await expect(
@@ -108,9 +108,8 @@ test('image upload generates a diagram', async ({ page }) => {
     // ── Assert the image preview appears ─────────────────────────
     await expect(page.locator('.image-preview')).toBeVisible({ timeout: 5_000 });
 
-    // ── Press Enter to send ─────────────────────────────────────
-    const textarea = page.locator('.chat-panel textarea');
-    await textarea.press('Enter');
+    // ── Click send to submit ────────────────────────────────────
+    await page.locator('#chat-send-btn').click();
 
     // ── Assert the AI response appears ──────────────────────────
     await expect(
