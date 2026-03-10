@@ -147,7 +147,7 @@
   <input
     bind:this={fileInputEl}
     type="file"
-    accept="image/png,image/jpeg,image/webp,image/gif"
+    accept="image/png,image/jpeg,image/webp,image/heic,image/heif"
     style="display: none"
     onchange={handleFileSelect}
   />

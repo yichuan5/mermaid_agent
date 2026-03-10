@@ -1,9 +1,4 @@
 import { test, expect } from '@playwright/test';
-import { resolve, dirname } from 'node:path';
-import { writeFileSync, unlinkSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
-
-const __dirname = dirname(fileURLToPath(import.meta.url));
 
 test('sending a message displays AI response and renders a diagram', async ({ page }) => {
     // ── Mock the backend API ─────────────────────────────────────
@@ -92,18 +87,26 @@ test('image upload generates a diagram', async ({ page }) => {
         page.locator('.message.assistant .message-bubble').first(),
     ).toBeVisible({ timeout: 10_000 });
 
-    // ── Create a tiny test PNG file ─────────────────────────────
+    // ── Create a tiny test PNG in memory ────────────────────────
     // 1×1 red pixel PNG (smallest valid PNG)
-    const testImagePath = resolve(__dirname, 'test-image.png');
     const pngBuffer = Buffer.from(
         'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
         'base64',
     );
-    writeFileSync(testImagePath, pngBuffer);
+
+    // ── Wait for Svelte hydration (event delegation set up) ─────
+    const fileInput = page.locator('.chat-panel input[type="file"]');
+    await page.waitForFunction(() => {
+        const input = document.querySelector('.chat-panel input[type="file"]');
+        return input && Object.getOwnPropertySymbols(input).length > 0;
+    }, null, { timeout: 10_000 });
 
     // ── Upload the image via the hidden file input ──────────────
-    const fileInput = page.locator('.chat-panel input[type="file"]');
-    await fileInput.setInputFiles(testImagePath);
+    await fileInput.setInputFiles({
+        name: 'test-image.png',
+        mimeType: 'image/png',
+        buffer: pngBuffer,
+    });
 
     // ── Assert the image preview appears ─────────────────────────
     await expect(page.locator('.image-preview')).toBeVisible({ timeout: 5_000 });
@@ -119,9 +122,6 @@ test('image upload generates a diagram', async ({ page }) => {
     // ── Assert a diagram SVG rendered ───────────────────────────
     const previewSvg = page.locator('.preview-panel svg');
     await expect(previewSvg).toBeVisible({ timeout: 10_000 });
-
-    // Cleanup
-    unlinkSync(testImagePath);
 });
 
 test('stops auto-fixing after max retries when code is invalid', async ({ page }) => {

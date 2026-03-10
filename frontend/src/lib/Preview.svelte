@@ -1,6 +1,6 @@
 <script lang="ts">
   import mermaid from "mermaid";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
 
   let {
     code,
@@ -136,11 +136,13 @@
   // ── Mermaid ─────────────────────────────────────────────────────
   const darkThemeConfig = {
     startOnLoad: false,
+    securityLevel: "strict" as const,
     theme: "dark" as const,
   };
 
   const lightThemeConfig = {
     startOnLoad: false,
+    securityLevel: "strict" as const,
     theme: "default" as const,
   };
 
@@ -270,6 +272,10 @@
     return () => {
       document.removeEventListener("click", handleClickOutside, true);
     };
+  });
+
+  onDestroy(() => {
+    clearTimeout(debounceTimer);
   });
 </script>
 

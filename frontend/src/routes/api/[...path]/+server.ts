@@ -1,7 +1,8 @@
 import { error } from '@sveltejs/kit';
+import { env } from '$env/dynamic/private';
 import type { RequestHandler } from './$types';
 
-const BACKEND_URL = process.env.PUBLIC_API_URL;
+const BACKEND_URL = env.BACKEND_URL;
 
 export const fallback: RequestHandler = async ({ request, url }) => {
     try {

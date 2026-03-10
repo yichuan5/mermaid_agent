@@ -2,220 +2,17 @@
   import ChatPanel from "$lib/ChatPanel.svelte";
   import Editor from "$lib/Editor.svelte";
   import Preview from "$lib/Preview.svelte";
-  import type { Message } from "$lib/types";
+  import { createChatStore } from "$lib/chat.svelte";
 
-  // ── Diagram state ──────────────────────────────────────────────
+  const chat = createChatStore();
+
+  // ── Diagram image capture ──────────────────────────────────────
   let previewComponent: ReturnType<typeof Preview>;
-  const DEFAULT_DIAGRAM = `---
-config:
-  look: handDrawn
----
-flowchart TD
-    Start([Start])
-    Start --> Describe[Describe Diagram]
-    Start --> Upload[Upload Image]
-
-    Describe --> AI[[AI Agent]]
-    Upload --> AI
-
-    AI --> Code[Mermaid Code]
-    Code --> Preview[Live Preview]
-
-    %% Feedback Loops
-    Code -- "iterate/feedback" --> AI`;
-
-  let diagramCode = $state(DEFAULT_DIAGRAM);
-
-  // Track where the current code came from: only auto-fix AI output
-  let codeSource: "ai" | "user" = "user";
-  let autoFixPending = false; // debounce: only one auto-fix at a time
-  let autoFixCount = 0;
-  const MAX_AUTO_FIX = 3;
-
-  // ── Chat state ─────────────────────────────────────────────────
-
-  let messages = $state<Message[]>([
-    {
-      role: "assistant",
-      content:
-        "Hi! I'm your Mermaid diagram assistant. Describe a diagram and I'll generate it for you. You can also ask me to update the current diagram!",
-    },
-  ]);
-  let isLoading = $state(false);
-
-  // ── AI call ────────────────────────────────────────────────────
-  async function callAI(
-    userMessage: string,
-    contextDiagram: string | null,
-    isAutoFix = false,
-  ) {
-    if (!isAutoFix) autoFixCount = 0;
-    isLoading = true;
-    try {
-      const history = messages
-        .slice(1, -1) // skip greeting & current message
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .slice(-20) // cap to last 20 to avoid huge payloads
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      if (contextDiagram === DEFAULT_DIAGRAM) {
-        contextDiagram = null;
-      }
-
-      let current_diagram_image = null;
-      if (previewComponent && contextDiagram) {
-        current_diagram_image = await previewComponent.getDiagramImageBase64();
-      }
-
-      const res = await fetch(`/api/chat`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          message: userMessage,
-          current_diagram: contextDiagram,
-          current_diagram_image,
-          history,
-        }),
-      });
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? `Server error ${res.status}`);
-      }
-      const data: {
-        mermaid_code: string | null;
-        explanation: string;
-        follow_up_commands: string[];
-      } = await res.json();
-
-      messages.push({
-        role: "assistant",
-        content: data.explanation,
-        followUpSuggestions: data.follow_up_commands,
-      });
-
-      if (data.mermaid_code) {
-        if (isAutoFix && data.mermaid_code === diagramCode) {
-          messages.push({
-            role: "system",
-            content:
-              "The AI returned the exact same broken code. Auto-fix aborted. Please provide more context or fix the code manually.",
-          });
-          autoFixCount = MAX_AUTO_FIX; // Stop further auto-fixing
-        } else {
-          codeSource = "ai";
-          diagramCode = data.mermaid_code;
-        }
-      }
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  // ── Handlers ───────────────────────────────────────────────────
-  function handleUserSubmit(text: string) {
-    messages.push({ role: "user", content: text });
-    callAI(text, diagramCode);
-  }
-
-  async function handleImageUpload(file: File, userMessage: string) {
-    autoFixCount = 0; // reset on manual upload
-    // Create a preview URL for the chat message
-    const previewUrl = URL.createObjectURL(file);
-    messages.push({
-      role: "user",
-      content: userMessage || "Convert this image to a Mermaid diagram",
-      imageUrl: previewUrl,
-    });
-
-    isLoading = true;
-    try {
-      const formData = new FormData();
-      formData.append("image", file);
-      formData.append("message", userMessage);
-
-      const res = await fetch(`/api/chat/image`, {
-        method: "POST",
-        body: formData,
-      });
-
-      if (!res.ok) {
-        const err = await res.json().catch(() => ({}));
-        throw new Error(err.detail ?? `Server error ${res.status}`);
-      }
-
-      const data: {
-        mermaid_code: string | null;
-        explanation: string;
-        follow_up_commands: string[];
-      } = await res.json();
-
-      messages.push({
-        role: "assistant",
-        content: data.explanation,
-        followUpSuggestions: data.follow_up_commands,
-      });
-
-      if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
-      }
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
-    } finally {
-      isLoading = false;
-    }
-  }
-
-  function handleCodeChange(code: string) {
-    codeSource = "user"; // user is now editing manually
-    diagramCode = code;
-  }
-
-  function handleAIUpdate(code: string) {
-    codeSource = "ai";
-    diagramCode = code;
-  }
-
-  function handleRenderError(code: string, error: string) {
-    // Only auto-fix if the broken code came from the AI, and no fix is in flight
-    if (codeSource !== "ai" || autoFixPending || isLoading) return;
-
-    if (autoFixCount >= MAX_AUTO_FIX) {
-      if (autoFixCount === MAX_AUTO_FIX) {
-        messages.push({
-          role: "system",
-          content: `Auto-fix limit reached (${MAX_AUTO_FIX} attempts). Please fix the code manually.`,
-        });
-        autoFixCount++; // Increment so we only show the max limit message once
-      }
-      return;
-    }
-
-    autoFixPending = true;
-    autoFixCount++;
-
-    messages.push({
-      role: "system",
-      content: `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
-    });
-
-    const fixPrompt =
-      `The Mermaid code you just generated failed to render with this error:\n\n` +
-      `Error: ${error}\n\n` +
-      `Please fix the syntax and return corrected Mermaid code.`;
-
-    callAI(fixPrompt, code, true).finally(() => {
-      autoFixPending = false;
-    });
-  }
+  $effect(() => {
+    chat.getDiagramImage = previewComponent
+      ? () => previewComponent.getDiagramImageBase64()
+      : null;
+  });
 
   // ── Panel resize ───────────────────────────────────────────────
   let widths = $state([22, 39, 39]);
@@ -281,10 +78,10 @@ flowchart TD
     style="grid-template-columns: {widths[0]}% 4px {widths[1]}% 4px {widths[2]}%"
   >
     <ChatPanel
-      {messages}
-      {isLoading}
-      onSubmit={handleUserSubmit}
-      onImageUpload={handleImageUpload}
+      messages={chat.messages}
+      isLoading={chat.isLoading}
+      onSubmit={chat.handleUserSubmit}
+      onImageUpload={chat.handleImageUpload}
     />
 
     <div
@@ -295,7 +92,7 @@ flowchart TD
       aria-label="Resize chat and editor panels"
     ></div>
 
-    <Editor code={diagramCode} onCodeChange={handleCodeChange} />
+    <Editor code={chat.diagramCode} onCodeChange={chat.handleCodeChange} />
 
     <div
       class="divider"
@@ -307,8 +104,8 @@ flowchart TD
 
     <Preview
       bind:this={previewComponent}
-      code={diagramCode}
-      onRenderError={handleRenderError}
+      code={chat.diagramCode}
+      onRenderError={chat.handleRenderError}
     />
   </main>
 </div>
