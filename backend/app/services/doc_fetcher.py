@@ -4,8 +4,11 @@ Dynamically discovers .md files via the GitHub Contents API
 """
 
 import asyncio
+import logging
 import httpx
 from pathlib import Path
+
+logger = logging.getLogger(__name__)
 
 DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid"
 
@@ -50,7 +53,7 @@ async def _download_file(client: httpx.AsyncClient, url: str, dest: Path) -> boo
         dest.write_text(resp.text, encoding="utf-8")
         return True
     except Exception as e:
-        print(f"[docs] Failed to fetch {url}: {e}")
+        logger.warning("Failed to fetch %s: %s", url, e)
         return False
 
 
@@ -60,10 +63,10 @@ async def fetch_docs(force: bool = False) -> None:
     Dynamically discovers which .md files exist in each directory.
     """
     if not force and docs_exist():
-        print("[docs] Mermaid docs already cached, skipping fetch")
+        logger.info("Mermaid docs already cached, skipping fetch")
         return
 
-    print("[docs] Fetching Mermaid documentation from GitHub...")
+    logger.info("Fetching Mermaid documentation from GitHub...")
 
     async with httpx.AsyncClient(timeout=30.0) as client:
         tasks = []
@@ -75,9 +78,9 @@ async def fetch_docs(force: bool = False) -> None:
 
             try:
                 md_files = await _list_md_files(client, repo_path)
-                print(f"[docs] Found {len(md_files)} .md files in {repo_path}")
+                logger.info("Found %d .md files in %s", len(md_files), repo_path)
             except Exception as e:
-                print(f"[docs] Failed to list {repo_path}: {e}")
+                logger.warning("Failed to list %s: %s", repo_path, e)
                 continue
 
             for file_info in md_files:
@@ -95,6 +98,6 @@ async def fetch_docs(force: bool = False) -> None:
             results = await asyncio.gather(*tasks, return_exceptions=True)
             success = sum(1 for r in results if r is True)
             failed = sum(1 for r in results if r is not True)
-            print(f"[docs] Fetched {success} docs ({failed} failures)")
+            logger.info("Fetched %d docs (%d failures)", success, failed)
         else:
-            print("[docs] No files discovered — check network or GitHub API")
+            logger.warning("No files discovered — check network or GitHub API")

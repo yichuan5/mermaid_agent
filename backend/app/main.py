@@ -7,7 +7,9 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.services.agent import generate_mermaid, image_to_mermaid
 from app.services.doc_fetcher import fetch_docs
 from app.schema import ChatRequest, ChatResponse
-import traceback
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -41,8 +43,8 @@ async def chat(req: ChatRequest):
         )
         return result
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in /api/chat")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 MAX_IMAGE_SIZE = 1 * 1024 * 1024  # 1 MB
@@ -69,12 +71,18 @@ async def chat_image(
         )
 
     try:
-        image_bytes = await image.read()
-        if len(image_bytes) > MAX_IMAGE_SIZE:
-            raise HTTPException(
-                status_code=400,
-                detail="Image too large. Maximum size is 1 MB.",
-            )
+        # Read in chunks to abort early on oversized uploads
+        chunks = []
+        total = 0
+        while chunk := await image.read(64 * 1024):
+            total += len(chunk)
+            if total > MAX_IMAGE_SIZE:
+                raise HTTPException(
+                    status_code=400,
+                    detail="Image too large. Maximum size is 1 MB.",
+                )
+            chunks.append(chunk)
+        image_bytes = b"".join(chunks)
 
         image_b64 = base64.b64encode(image_bytes).decode("utf-8")
         result = await image_to_mermaid(
@@ -86,8 +94,8 @@ async def chat_image(
     except HTTPException:
         raise
     except Exception as e:
-        traceback.print_exc()
-        raise HTTPException(status_code=500, detail=str(e))
+        logger.exception("Error in /api/chat/image")
+        raise HTTPException(status_code=500, detail="Internal server error")
 
 
 @app.get("/health")

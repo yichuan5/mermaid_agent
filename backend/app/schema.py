@@ -7,10 +7,10 @@ class HistoryMessage(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
-    current_diagram: str | None = None
+    message: str = Field(max_length=10000)
+    current_diagram: str | None = Field(default=None, max_length=50000)
     current_diagram_image: str | None = None
-    history: list[HistoryMessage] = []
+    history: list[HistoryMessage] = Field(default=[], max_length=100)
 
 
 class ChatResponse(BaseModel):

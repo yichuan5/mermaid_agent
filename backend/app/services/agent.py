@@ -11,7 +11,9 @@ from pydantic_ai.providers.google import GoogleProvider
 from pydantic_ai.messages import (
     ModelMessage,
     ModelRequest,
+    ModelResponse,
     UserPromptPart,
+    TextPart,
     BinaryContent,
 )
 from app.schema import ChatResponse, HistoryMessage
@@ -29,8 +31,8 @@ load_dotenv(Path(__file__).parent.parent.parent / ".env")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 API_KEY = os.getenv("GEMINI_API_KEY")
 
-print(f"[llm] Using model: {MODEL}")
-print(f"[llm] API key loaded: {'yes' if API_KEY else 'NO - check .env!'}")
+logger.info("Using model: %s", MODEL)
+logger.info("API key loaded: %s", "yes" if API_KEY else "NO - check .env!")
 
 provider = GoogleProvider(api_key=API_KEY)
 llm = GoogleModel(model_name=MODEL, provider=provider)
@@ -174,13 +176,14 @@ async def generate_mermaid(
     # Reconstruct history for Pydantic AI
     if history:
         for h in history:
-            messages.append(
-                ModelRequest(parts=[UserPromptPart(content=h.content)])
-                if h.role == "user"
-                else ModelRequest(
-                    parts=[UserPromptPart(content=h.content)]
-                )  # Simplification, normally we'd parse tool calls if we stored them
-            )
+            if h.role == "user":
+                messages.append(
+                    ModelRequest(parts=[UserPromptPart(content=h.content)])
+                )
+            else:
+                messages.append(
+                    ModelResponse(parts=[TextPart(content=h.content)])
+                )
 
     user_prompt = ""
     if current_diagram:
