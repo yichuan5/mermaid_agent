@@ -8,8 +8,14 @@ class HistoryMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     message: str = Field(max_length=10000)
-    current_diagram: str | None = Field(default=None, max_length=50000)
-    current_diagram_image: str | None = None
+    current_mermaid_code: str | None = Field(default=None, max_length=50000)
+    current_image: str | None = None
+    history: list[HistoryMessage] = Field(default=[], max_length=100)
+
+
+class FixRequest(BaseModel):
+    broken_code: str = Field(max_length=50000)
+    error: str = Field(max_length=5000)
     history: list[HistoryMessage] = Field(default=[], max_length=100)
 
 
@@ -21,5 +27,11 @@ class ChatResponse(BaseModel):
     explanation: str
     follow_up_commands: list[str] = Field(
         default=[],
-        description="Choices to modify the diagram in the form of specific actionable commands."
+        description="Choices to modify the diagram in the form of specific actionable commands.",
+    )
+
+
+class FixResponse(BaseModel):
+    mermaid_code: str = Field(
+        description="The corrected raw mermaid code. Do NOT enclose it in markdown code blocks (e.g. ```mermaid ... ```).",
     )

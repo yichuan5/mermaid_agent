@@ -4,9 +4,9 @@ import base64
 from fastapi import FastAPI, HTTPException, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.services.agent import generate_mermaid, image_to_mermaid
+from app.services.agent import generate_mermaid, generate_fix, image_to_mermaid
 from app.services.doc_fetcher import fetch_docs
-from app.schema import ChatRequest, ChatResponse
+from app.schema import ChatRequest, ChatResponse, FixRequest, FixResponse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,13 +37,27 @@ async def chat(req: ChatRequest):
     try:
         result = await generate_mermaid(
             message=req.message,
-            current_diagram=req.current_diagram,
-            current_diagram_image=req.current_diagram_image,
+            current_mermaid_code=req.current_mermaid_code,
+            current_image=req.current_image,
             history=req.history,
         )
         return result
-    except Exception as e:
+    except Exception:
         logger.exception("Error in /api/chat")
+        raise HTTPException(status_code=500, detail="Internal server error")
+
+
+@app.post("/api/fix", response_model=FixResponse)
+async def fix(req: FixRequest):
+    try:
+        result = await generate_fix(
+            broken_code=req.broken_code,
+            error=req.error,
+            history=req.history,
+        )
+        return result
+    except Exception:
+        logger.exception("Error in /api/fix")
         raise HTTPException(status_code=500, detail="Internal server error")
 
 
@@ -93,7 +107,7 @@ async def chat_image(
         return result
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("Error in /api/chat/image")
         raise HTTPException(status_code=500, detail="Internal server error")
 

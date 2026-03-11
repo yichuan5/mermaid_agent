@@ -5,9 +5,13 @@
   let {
     code,
     onRenderError,
+    onFixRequest,
+    isLoading = false,
   }: {
     code: string;
     onRenderError?: (code: string, error: string) => void;
+    onFixRequest?: (code: string, error: string) => void;
+    isLoading?: boolean;
   } = $props();
 
   export async function getDiagramImageBase64(): Promise<string | null> {
@@ -373,6 +377,15 @@
         <span class="error-icon"></span>
         <p class="error-title">Rendering Error</p>
         <pre class="error-msg">{renderError}</pre>
+        {#if onFixRequest}
+          <button
+            class="fix-btn"
+            onclick={() => onFixRequest(code, renderError)}
+            disabled={isLoading}
+          >
+            {isLoading ? 'Fixing…' : '✨ Fix with AI'}
+          </button>
+        {/if}
       </div>
     {/if}
 

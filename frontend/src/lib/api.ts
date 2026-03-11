@@ -6,13 +6,36 @@ export interface ChatResponse {
 
 export interface ChatPayload {
     message: string;
-    current_diagram: string | null;
-    current_diagram_image: string | null;
+    current_mermaid_code: string | null;
+    current_image: string | null;
     history: { role: string; content: string }[];
 }
 
 export async function sendChat(payload: ChatPayload): Promise<ChatResponse> {
     const res = await fetch(`/api/chat`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail ?? `Server error ${res.status}`);
+    }
+    return res.json();
+}
+
+export interface FixPayload {
+    broken_code: string;
+    error: string;
+    history: { role: string; content: string }[];
+}
+
+export interface FixResponse {
+    mermaid_code: string;
+}
+
+export async function sendFix(payload: FixPayload): Promise<FixResponse> {
+    const res = await fetch(`/api/fix`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(payload),

@@ -985,3 +985,25 @@ body {
     max-height: 120px;
     overflow-y: auto;
 }
+
+.fix-btn {
+    margin-top: 10px;
+    padding: 6px 16px;
+    font-size: 12px;
+    font-weight: 600;
+    color: #fff;
+    background: var(--accent);
+    border: none;
+    border-radius: var(--radius-sm);
+    cursor: pointer;
+    transition: background 0.15s ease, opacity 0.15s ease;
+}
+
+.fix-btn:hover:not(:disabled) {
+    background: var(--accent-light);
+}
+
+.fix-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}

@@ -106,6 +106,8 @@
       bind:this={previewComponent}
       code={chat.diagramCode}
       onRenderError={chat.handleRenderError}
+      onFixRequest={chat.handleFixRequest}
+      isLoading={chat.isLoading}
     />
   </main>
 </div>

@@ -1,5 +1,6 @@
 import type { Message } from "$lib/types";
-import { sendChat, sendImage } from "$lib/api";
+import { sendChat, sendFix, sendImage } from "$lib/api";
+import type { FixResponse } from "$lib/api";
 
 const DEFAULT_DIAGRAM = `---
 config:
@@ -42,9 +43,8 @@ export function createChatStore() {
   async function sendChatRequest(
     userMessage: string,
     contextDiagram: string | null,
-    isAutoFix = false,
   ) {
-    if (!isAutoFix) autoFixCount = 0;
+    autoFixCount = 0;
     isLoading = true;
     try {
       const history = messages
@@ -57,15 +57,15 @@ export function createChatStore() {
         contextDiagram = null;
       }
 
-      let current_diagram_image = null;
+      let current_image = null;
       if (getDiagramImage && contextDiagram) {
-        current_diagram_image = await getDiagramImage();
+        current_image = await getDiagramImage();
       }
 
       const data = await sendChat({
         message: userMessage,
-        current_diagram: contextDiagram,
-        current_diagram_image,
+        current_mermaid_code: contextDiagram,
+        current_image,
         history,
       });
 
@@ -76,17 +76,8 @@ export function createChatStore() {
       });
 
       if (data.mermaid_code) {
-        if (isAutoFix && data.mermaid_code === diagramCode) {
-          messages.push({
-            role: "system",
-            content:
-              "The AI returned the exact same broken code. Auto-fix aborted. Please provide more context or fix the code manually.",
-          });
-          autoFixCount = MAX_AUTO_FIX;
-        } else {
-          codeSource = "ai";
-          diagramCode = data.mermaid_code;
-        }
+        codeSource = "ai";
+        diagramCode = data.mermaid_code;
       }
     } catch (e: any) {
       messages.push({
@@ -142,7 +133,7 @@ export function createChatStore() {
     diagramCode = code;
   }
 
-  function handleRenderError(code: string, error: string) {
+  async function handleRenderError(code: string, error: string) {
     if (codeSource !== "ai" || autoFixPending || isLoading) return;
 
     if (autoFixCount >= MAX_AUTO_FIX) {
@@ -164,14 +155,61 @@ export function createChatStore() {
       content: `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
     });
 
-    const fixPrompt =
-      `The Mermaid code you just generated failed to render with this error:\n\n` +
-      `Error: ${error}\n\n` +
-      `Please fix the syntax and return corrected Mermaid code.`;
+    try {
+      isLoading = true;
 
-    sendChatRequest(fixPrompt, code, true).finally(() => {
+      const history = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const data = await sendFix({
+        broken_code: code,
+        error,
+        history,
+      });
+
+      if (data.mermaid_code) {
+        codeSource = "ai";
+        diagramCode = data.mermaid_code;
+      }
+    } catch (e: any) {
+      messages.push({
+        role: "assistant",
+        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
+      });
+    } finally {
+      isLoading = false;
       autoFixPending = false;
+    }
+  }
+
+  async function handleFixRequest(code: string, error: string) {
+    if (isLoading) return;
+    isLoading = true;
+    messages.push({
+      role: "system",
+      content: `Asking AI to fix the code...\n\`${error.split("\n")[0]}\``,
     });
+    try {
+      const history = messages
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .slice(-20)
+        .map((m) => ({ role: m.role, content: m.content }));
+
+      const data = await sendFix({ broken_code: code, error, history });
+      if (data.mermaid_code) {
+        codeSource = "ai";
+        diagramCode = data.mermaid_code;
+      }
+    } catch (e: any) {
+      messages.push({
+        role: "assistant",
+        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
+      });
+    } finally {
+      isLoading = false;
+    }
   }
 
   return {
@@ -183,5 +221,6 @@ export function createChatStore() {
     handleImageUpload,
     handleCodeChange,
     handleRenderError,
+    handleFixRequest,
   };
 }

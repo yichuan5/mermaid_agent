@@ -16,8 +16,8 @@ from pydantic_ai.messages import (
     TextPart,
     BinaryContent,
 )
-from app.schema import ChatResponse, HistoryMessage
-from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT
+from app.schema import ChatResponse, FixResponse, HistoryMessage
+from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT, FIX_PROMPT
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -164,8 +164,8 @@ def read_mermaid_config(ctx: RunContext[None], property_name: str | None = None)
 
 async def generate_mermaid(
     message: str,
-    current_diagram: str | None = None,
-    current_diagram_image: str | None = None,
+    current_mermaid_code: str | None = None,
+    current_image: str | None = None,
     history: list[HistoryMessage] | None = None,
 ) -> dict:
     """
@@ -177,25 +177,21 @@ async def generate_mermaid(
     if history:
         for h in history:
             if h.role == "user":
-                messages.append(
-                    ModelRequest(parts=[UserPromptPart(content=h.content)])
-                )
+                messages.append(ModelRequest(parts=[UserPromptPart(content=h.content)]))
             else:
-                messages.append(
-                    ModelResponse(parts=[TextPart(content=h.content)])
-                )
+                messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
 
     user_prompt = ""
-    if current_diagram:
-        user_prompt += f"Here is the current diagram code:\n\n```mermaid\n{current_diagram}\n```\n\n"
-        if current_diagram_image:
+    if current_mermaid_code:
+        user_prompt += f"Here is the current diagram code:\n\n```mermaid\n{current_mermaid_code}\n```\n\n"
+        if current_image:
             user_prompt += "The attached image is the rendered output of this current diagram code.\n\n"
 
     user_prompt += f"User Request: {message}"
 
     prompt_parts = [user_prompt]
-    if current_diagram_image:
-        image_url = f"data:image/png;base64,{current_diagram_image}"
+    if current_image:
+        image_url = f"data:image/png;base64,{current_image}"
         prompt_parts.append(BinaryContent.from_data_uri(image_url))
 
     result = await mermaid_agent.run(
@@ -204,6 +200,47 @@ async def generate_mermaid(
     )
 
     # The result.output is already constrained to be a ChatResponse
+    return result.output.model_dump()
+
+
+fix_agent = Agent(
+    model=llm,
+    output_type=FixResponse,
+    system_prompt=FIX_PROMPT,
+    retries=2,
+)
+
+fix_agent.tool(read_mermaid_syntax)
+fix_agent.tool(read_mermaid_config)
+
+
+async def generate_fix(
+    broken_code: str,
+    error: str,
+    history: list[HistoryMessage] | None = None,
+) -> dict:
+    """Fix a broken Mermaid diagram based on the rendering error."""
+    messages: list[ModelMessage] = []
+
+    if history:
+        for h in history:
+            if h.role == "user":
+                messages.append(ModelRequest(parts=[UserPromptPart(content=h.content)]))
+            else:
+                messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
+
+    user_prompt = (
+        f"The following Mermaid code failed to render:\n\n"
+        f"```mermaid\n{broken_code}\n```\n\n"
+        f"Error: {error}\n\n"
+        f"Please fix the syntax and return corrected Mermaid code."
+    )
+
+    result = await fix_agent.run(
+        user_prompt=user_prompt,
+        message_history=messages,
+    )
+
     return result.output.model_dump()
 
 

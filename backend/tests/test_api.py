@@ -25,16 +25,15 @@ MOCK_LLM = {
 
 # ── POST /api/chat ──────────────────────────────────────────────
 
+
 class TestChatEndpoint:
-    @patch(
-        "app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
-    )
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
     def test_valid_request_returns_200(self, mock_ai, client):
         resp = client.post(
             "/api/chat",
             json={
                 "message": "Draw a flowchart",
-                "current_diagram": None,
+                "current_mermaid_code": None,
                 "history": [],
             },
         )
@@ -44,15 +43,13 @@ class TestChatEndpoint:
         assert data["explanation"] == MOCK_LLM["explanation"]
         assert data["follow_up_commands"] == ["Add more nodes?"]
 
-    @patch(
-        "app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
-    )
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
     def test_with_history(self, mock_ai, client):
         resp = client.post(
             "/api/chat",
             json={
                 "message": "Add a node",
-                "current_diagram": "flowchart TD\n    A --> B",
+                "current_mermaid_code": "flowchart TD\n    A --> B",
                 "history": [
                     {"role": "user", "content": "Draw a flowchart"},
                     {"role": "assistant", "content": "Here you go."},
@@ -69,7 +66,7 @@ class TestChatEndpoint:
             "/api/chat",
             json={
                 "message": "   ",
-                "current_diagram": None,
+                "current_mermaid_code": None,
                 "history": [],
             },
         )
@@ -84,9 +81,7 @@ class TestChatEndpoint:
 
 
 class TestImageEndpoint:
-    @patch(
-        "app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
-    )
+    @patch("app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
     def test_valid_png_returns_200(self, mock_ai, client):
         # Create a minimal fake PNG (just needs a valid content type header)
         fake_png = io.BytesIO(b"\x89PNG\r\n\x1a\n" + b"\x00" * 100)
@@ -99,9 +94,7 @@ class TestImageEndpoint:
         data = resp.json()
         assert data["mermaid_code"] is not None
 
-    @patch(
-        "app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM
-    )
+    @patch("app.main.image_to_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
     def test_valid_jpeg_returns_200(self, mock_ai, client):
         fake_jpg = io.BytesIO(b"\xff\xd8\xff" + b"\x00" * 100)
         resp = client.post(
@@ -120,6 +113,49 @@ class TestImageEndpoint:
         )
         assert resp.status_code == 400
         assert "Unsupported image type" in resp.json()["detail"]
+
+
+# ── POST /api/fix ────────────────────────────────────────────────
+
+
+class TestFixEndpoint:
+    @patch("app.main.generate_fix", new_callable=AsyncMock, return_value=MOCK_LLM)
+    def test_valid_fix_request_returns_200(self, mock_ai, client):
+        resp = client.post(
+            "/api/fix",
+            json={
+                "broken_code": "flowchart TD\n    A --> B -->",
+                "error": "Parse error on line 2",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mermaid_code"] == MOCK_LLM["mermaid_code"]
+
+    @patch("app.main.generate_fix", new_callable=AsyncMock, return_value=MOCK_LLM)
+    def test_fix_with_history(self, mock_ai, client):
+        resp = client.post(
+            "/api/fix",
+            json={
+                "broken_code": "flowchart TD\n    A --> B -->",
+                "error": "Parse error on line 2",
+                "history": [
+                    {"role": "user", "content": "Draw a flowchart"},
+                    {"role": "assistant", "content": "Here you go."},
+                ],
+            },
+        )
+        assert resp.status_code == 200
+        call_args = mock_ai.call_args
+        assert len(call_args.kwargs["history"]) == 2
+
+    def test_missing_broken_code_returns_422(self, client):
+        resp = client.post("/api/fix", json={"error": "Parse error"})
+        assert resp.status_code == 422
+
+    def test_missing_error_returns_422(self, client):
+        resp = client.post("/api/fix", json={"broken_code": "flowchart TD"})
+        assert resp.status_code == 422
 
 
 # ── GET /health ─────────────────────────────────────────────────

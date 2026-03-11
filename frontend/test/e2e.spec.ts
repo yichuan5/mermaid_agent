@@ -125,20 +125,32 @@ test('image upload generates a diagram', async ({ page }) => {
 });
 
 test('stops auto-fixing after max retries when code is invalid', async ({ page }) => {
-    let requestsCount = 0;
+    let chatRequests = 0;
+    let fixRequests = 0;
 
     // ── Mock the backend to always return invalid Mermaid code ────
     await page.route('**/api/chat', (route) => {
-        requestsCount++;
-        // Return a broken flowchart diagram (make it different each time so it doesn't trigger the identical-code abort)
+        chatRequests++;
         return route.fulfill({
             status: 200,
             contentType: 'application/json',
             body: JSON.stringify({
-                mermaid_code: `flowchart TD\n    A[Hello] -- Broken ${requestsCount}`, // invalid syntax
+                mermaid_code: `flowchart TD\n    A[Hello] -- Broken`, // invalid syntax
                 explanation: 'Here is your diagram.',
                 follow_up_commands: [],
-                needs_clarification: false,
+            }),
+        });
+    });
+
+    await page.route('**/api/fix', (route) => {
+        fixRequests++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: `flowchart TD\n    A[Hello] -- Still Broken ${fixRequests}`, // still invalid
+                explanation: 'Tried to fix.',
+                follow_up_commands: [],
             }),
         });
     });
@@ -166,6 +178,7 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
         { timeout: 15_000 }
     );
 
-    // Initial request + 3 auto-fixes = 4 requests to the backend
-    expect(requestsCount).toBe(4);
+    // 1 chat request + 3 fix requests
+    expect(chatRequests).toBe(1);
+    expect(fixRequests).toBe(3);
 });
