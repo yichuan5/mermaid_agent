@@ -182,3 +182,40 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
     expect(chatRequests).toBe(1);
     expect(fixRequests).toBe(3);
 });
+
+test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
+    let fixRequests = 0;
+    await page.route('**/api/fix', async (route) => {
+        fixRequests++;
+        await route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A[Fixed]',
+                explanation: 'Fixed the diagram.',
+                follow_up_commands: [],
+            }),
+        });
+    });
+
+    await page.goto('/');
+
+    // Type invalid code to trigger render error
+    const editor = page.locator('.cm-content');
+    await editor.click();
+    await editor.fill('invalid mermaid code');
+
+    // Wait for the "Fix with AI" button to appear
+    const fixBtn = page.locator('.fix-btn');
+    await expect(fixBtn).toBeVisible({ timeout: 10_000 });
+
+    // Click the button
+    await fixBtn.click();
+
+    // Verify it sent a request
+    expect(fixRequests).toBe(1);
+
+    // Verify the code gets updated
+    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+});
+

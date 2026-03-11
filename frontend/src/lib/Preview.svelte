@@ -373,7 +373,8 @@
     aria-label="Mermaid diagram preview — scroll to zoom, drag to pan"
   >
     {#if renderError}
-      <div class="error-overlay">
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="error-overlay" onpointerdown={(e) => e.stopPropagation()}>
         <span class="error-icon"></span>
         <p class="error-title">Rendering Error</p>
         <pre class="error-msg">{renderError}</pre>
