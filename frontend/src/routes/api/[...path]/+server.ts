@@ -22,8 +22,19 @@ export const fallback: RequestHandler = async ({ request, url }) => {
         newReq.headers.delete("host");
 
         const proxyResponse = await fetch(newReq);
+        if (!proxyResponse.ok) {
+            const body = await proxyResponse.text();
+            console.error(
+                `[proxy] ${request.method} ${url.pathname} → ${proxyResponse.status}: ${body}`
+            );
+            return new Response(body, {
+                status: proxyResponse.status,
+                headers: { 'Content-Type': 'application/json' },
+            });
+        }
         return proxyResponse;
     } catch (err: any) {
+        console.error(`[proxy] ${request.method} ${url.pathname} threw:`, err);
         throw error(500, `Error proxying request: ${err.message}`);
     }
 };

@@ -10,7 +10,7 @@
   let previewComponent: ReturnType<typeof Preview>;
   $effect(() => {
     chat.getDiagramImage = previewComponent
-      ? () => previewComponent.getDiagramImageBase64()
+      ? () => previewComponent.getDiagramImageForAI()
       : null;
   });
 

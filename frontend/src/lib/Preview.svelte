@@ -14,55 +14,59 @@
     isLoading?: boolean;
   } = $props();
 
-  export async function getDiagramImageBase64(): Promise<string | null> {
+  /**
+   * Shared helper: renders the current diagram SVG to a JPEG base64 string.
+   * @param scale     Pixel multiplier (e.g. 1 for AI context, 2 for download)
+   * @param maxSide   Cap the longest side to this many pixels (Infinity = no cap)
+   * @param quality   JPEG quality 0–1
+   */
+  async function svgToJpeg(
+    scale: number,
+    maxSide: number,
+    quality: number,
+  ): Promise<string | null> {
     const svgEl = wrapperEl?.querySelector("svg");
     if (!svgEl) return null;
 
-    // Clone the SVG so we can modify it without affecting the live preview
     const clone = svgEl.cloneNode(true) as SVGSVGElement;
-
-    // Inline all computed styles so text/colors render in the <img> context
     inlineStyles(svgEl, clone);
 
-    // Determine real pixel dimensions from the rendered SVG
     const bbox = svgEl.getBoundingClientRect();
-    const w = Math.ceil(bbox.width);
-    const h = Math.ceil(bbox.height);
+    const effectiveScale =
+      scale * Math.min(1, maxSide / Math.max(bbox.width, bbox.height, 1));
+    const w = Math.ceil(bbox.width * effectiveScale);
+    const h = Math.ceil(bbox.height * effectiveScale);
 
-    // Set explicit width/height (required for canvas rendering)
     clone.setAttribute("width", `${w}`);
     clone.setAttribute("height", `${h}`);
 
-    // Serialise and encode as base64 data URL (more reliable than blob URL for canvas)
     const svgData = new XMLSerializer().serializeToString(clone);
     const bytes = new TextEncoder().encode(svgData);
     let binary = "";
-    for (let i = 0; i < bytes.byteLength; i++) {
+    for (let i = 0; i < bytes.byteLength; i++)
       binary += String.fromCharCode(bytes[i]);
-    }
-    const base64 = btoa(binary);
-    const dataUrl = `data:image/svg+xml;base64,${base64}`;
-
-    const scale = 2; // 2× for crisp output
+    const dataUrl = `data:image/svg+xml;base64,${btoa(binary)}`;
 
     return new Promise((resolve) => {
       const img = new Image();
       img.onload = () => {
         const canvas = document.createElement("canvas");
-        canvas.width = w * scale;
-        canvas.height = h * scale;
+        canvas.width = w;
+        canvas.height = h;
         const ctx = canvas.getContext("2d")!;
-        ctx.scale(scale, scale);
         ctx.fillStyle = previewDark ? "#0f1117" : "#ffffff";
         ctx.fillRect(0, 0, w, h);
         ctx.drawImage(img, 0, 0, w, h);
-        // We only want the base64 string without the data:image/png;base64, prefix
-        const dataUrl = canvas.toDataURL("image/png");
-        resolve(dataUrl.split(",")[1]);
+        resolve(canvas.toDataURL("image/jpeg", quality).split(",")[1]);
       };
       img.onerror = () => resolve(null);
       img.src = dataUrl;
     });
+  }
+
+  /** Low-res snapshot for LLM context: 1× scale, capped at 1024 px, JPEG 80%. */
+  export async function getDiagramImageForAI(): Promise<string | null> {
+    return svgToJpeg(1, 1024, 0.8);
   }
 
   let wrapperEl: HTMLDivElement; // the scaled/translated diagram
@@ -213,14 +217,12 @@
     showDownloadMenu = false;
   }
 
-  async function downloadPNG() {
-    const base64 = await getDiagramImageBase64();
+  async function downloadJPEG() {
+    const base64 = await svgToJpeg(2, Infinity, 0.9);
     if (!base64) return;
-
-    // convert base64 back to blob for download
-    const res = await fetch(`data:image/png;base64,${base64}`);
+    const res = await fetch(`data:image/jpeg;base64,${base64}`);
     const blob = await res.blob();
-    triggerDownload(blob, "diagram.png");
+    triggerDownload(blob, "diagram.jpg");
     showDownloadMenu = false;
   }
 
@@ -332,9 +334,9 @@
               <strong>SVG</strong>
             </span>
           </button>
-          <button class="download-menu-item" onclick={downloadPNG}>
+          <button class="download-menu-item" onclick={downloadJPEG}>
             <span class="download-menu-label">
-              <strong>PNG</strong>
+              <strong>JPEG</strong>
             </span>
           </button>
         </div>
@@ -384,7 +386,7 @@
             onclick={() => onFixRequest(code, renderError)}
             disabled={isLoading}
           >
-            {isLoading ? 'Fixing…' : '✨ Fix with AI'}
+            {isLoading ? "Fixing…" : "✨ Fix with AI"}
           </button>
         {/if}
       </div>

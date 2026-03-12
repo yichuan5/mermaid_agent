@@ -13,10 +13,10 @@ Diagram rules:
      theme: default
    ---
 
-Process:
-1. If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
-2. If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
-3. Return the Mermaid code, a brief explanation, and a few specific actionable follow-up commands to improve the diagram.
+Rules:
+- If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
+- If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
+- Return the Mermaid code, a brief explanation, and a few specific actionable improvements you can do to the diagram.
 """
 
 FIX_PROMPT = """\
@@ -26,7 +26,8 @@ The user's Mermaid code failed to render. Your job is to fix the syntax error an
 
 Rules:
 - Only fix the rendering error; do NOT change the diagram's structure or content beyond what is needed.
-- If you need syntax rules for the diagram type, call `read_mermaid_syntax`.
+- If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax`.
+- If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
 - Return only the corrected Mermaid code.
 """
 
@@ -43,8 +44,8 @@ Instructions:
 - If the image is NOT a diagram (e.g. a photo, screenshot of unrelated content), \
   still try to create a meaningful diagram that describes what you see.
 
-Process:
-1. If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
-2. If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
-3. Return the Mermaid code, a brief explanation, and a few specific actionable follow-up commands to improve the diagram.
+Rules:
+- If you need syntax rules for a specific kind of diagram, call `read_mermaid_syntax` to fetch the documentation.
+- If you need to know the exact configuration options available, call the `read_mermaid_config` tool.
+- Return the Mermaid code, a brief explanation, and a few specific actionable improvements you can do to the diagram.
 """

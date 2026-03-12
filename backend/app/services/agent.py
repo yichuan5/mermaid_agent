@@ -194,10 +194,23 @@ async def generate_mermaid(
         image_url = f"data:image/png;base64,{current_image}"
         prompt_parts.append(BinaryContent.from_data_uri(image_url))
 
-    result = await mermaid_agent.run(
-        user_prompt=prompt_parts,
-        message_history=messages,
+    logger.info(
+        "generate_mermaid: calling LLM (history_len=%d, has_image=%s)",
+        len(messages),
+        current_image is not None,
     )
+    try:
+        result = await mermaid_agent.run(
+            user_prompt=prompt_parts,
+            message_history=messages,
+        )
+    except Exception:
+        logger.exception(
+            "generate_mermaid: LLM call failed (model=%s, history_len=%d)",
+            MODEL,
+            len(messages),
+        )
+        raise
 
     # The result.output is already constrained to be a ChatResponse
     return result.output.model_dump()
@@ -248,10 +261,23 @@ async def generate_fix(
         f"Please fix the syntax and return corrected Mermaid code."
     )
 
-    result = await fix_agent.run(
-        user_prompt=user_prompt,
-        message_history=messages,
+    logger.info(
+        "generate_fix: calling LLM (history_len=%d, fix_attempts=%d)",
+        len(messages),
+        len(fix_attempts) if fix_attempts else 0,
     )
+    try:
+        result = await fix_agent.run(
+            user_prompt=user_prompt,
+            message_history=messages,
+        )
+    except Exception:
+        logger.exception(
+            "generate_fix: LLM call failed (model=%s, error_snippet=%r)",
+            MODEL,
+            error[:120],
+        )
+        raise
 
     return result.output.model_dump()
 
@@ -289,8 +315,19 @@ async def image_to_mermaid(
         BinaryContent.from_data_uri(image_url),
     ]
 
-    result = await convert_agent.run(
-        user_prompt=prompt_parts,
+    logger.info(
+        "image_to_mermaid: calling LLM (model=%s, mime=%s)", MODEL, mime_type
     )
+    try:
+        result = await convert_agent.run(
+            user_prompt=prompt_parts,
+        )
+    except Exception:
+        logger.exception(
+            "image_to_mermaid: LLM call failed (model=%s, mime=%s)",
+            MODEL,
+            mime_type,
+        )
+        raise
 
     return result.output.model_dump()
