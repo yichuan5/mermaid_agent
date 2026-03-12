@@ -16,7 +16,7 @@ from pydantic_ai.messages import (
     TextPart,
     BinaryContent,
 )
-from app.schema import ChatResponse, FixResponse, HistoryMessage
+from app.schema import ChatResponse, FixResponse, HistoryMessage, FixAttempt
 from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT, FIX_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -218,6 +218,7 @@ async def generate_fix(
     broken_code: str,
     error: str,
     history: list[HistoryMessage] | None = None,
+    fix_attempts: list[FixAttempt] | None = None,
 ) -> dict:
     """Fix a broken Mermaid diagram based on the rendering error."""
     messages: list[ModelMessage] = []
@@ -229,8 +230,19 @@ async def generate_fix(
             else:
                 messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
 
-    user_prompt = (
-        f"The following Mermaid code failed to render:\n\n"
+    if fix_attempts:
+        user_prompt = "Previous failed attempts to fix this diagram — do NOT repeat these mistakes:\n\n"
+        for i, attempt in enumerate(fix_attempts, 1):
+            user_prompt += (
+                f"Attempt {i}:\n"
+                f"Code:\n```mermaid\n{attempt.code}\n```\n"
+                f"Error: {attempt.error}\n\n"
+            )
+        user_prompt += "Now, the current Mermaid code still fails to render:\n\n"
+    else:
+        user_prompt = "The following Mermaid code failed to render:\n\n"
+
+    user_prompt += (
         f"```mermaid\n{broken_code}\n```\n\n"
         f"Error: {error}\n\n"
         f"Please fix the syntax and return corrected Mermaid code."

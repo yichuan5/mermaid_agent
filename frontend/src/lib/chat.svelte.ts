@@ -1,6 +1,36 @@
 import type { Message } from "$lib/types";
 import { sendChat, sendFix, sendImage } from "$lib/api";
-import type { FixResponse } from "$lib/api";
+
+/**
+ * Build a conversation history suitable for the backend.
+ * - Excludes system messages
+ * - Removes consecutive entries with the same role (keeps the last one)
+ *   so the array always strictly alternates user/assistant.
+ */
+function buildHistory(
+  msgs: Message[],
+  { skip }: { skip?: "first" | "last" | "both" } = {},
+): { role: string; content: string }[] {
+  let slice = msgs;
+  if (skip === "first" || skip === "both") slice = slice.slice(1);
+  if (skip === "last" || skip === "both") slice = slice.slice(0, -1);
+
+  const filtered = slice
+    .filter((m) => m.role === "user" || m.role === "assistant")
+    .map((m) => ({ role: m.role, content: m.content }));
+
+  // Deduplicate consecutive same-role entries (keep the last of each run)
+  const deduped: { role: string; content: string }[] = [];
+  for (const m of filtered) {
+    if (deduped.length > 0 && deduped[deduped.length - 1].role === m.role) {
+      deduped[deduped.length - 1] = m; // replace with the later one
+    } else {
+      deduped.push(m);
+    }
+  }
+
+  return deduped.slice(-20);
+}
 
 const DEFAULT_DIAGRAM = `---
 config:
@@ -27,12 +57,13 @@ export function createChatStore() {
   let codeSource: "ai" | "user" = $state("user");
   let autoFixPending = $state(false);
   let autoFixCount = $state(0);
+  let fixAttempts = $state<{ code: string; error: string }[]>([]);
 
   let messages = $state<Message[]>([
     {
       role: "assistant",
       content:
-        "Hi! I'm your Mermaid diagram assistant. Describe a diagram and I'll generate it for you. You can also ask me to update the current diagram!",
+        "Hi! I'm your Mermaid diagram assistant. Describe a diagram in detail and I'll generate it for you.",
     },
   ]);
   let isLoading = $state(false);
@@ -45,13 +76,10 @@ export function createChatStore() {
     contextDiagram: string | null,
   ) {
     autoFixCount = 0;
+    fixAttempts = [];
     isLoading = true;
     try {
-      const history = messages
-        .slice(1, -1)
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .slice(-20)
-        .map((m) => ({ role: m.role, content: m.content }));
+      const history = buildHistory(messages, { skip: "both" });
 
       if (contextDiagram === DEFAULT_DIAGRAM) {
         contextDiagram = null;
@@ -96,6 +124,7 @@ export function createChatStore() {
 
   async function handleImageUpload(file: File, userMessage: string) {
     autoFixCount = 0;
+    fixAttempts = [];
     const previewUrl = URL.createObjectURL(file);
     messages.push({
       role: "user",
@@ -133,6 +162,24 @@ export function createChatStore() {
     diagramCode = code;
   }
 
+  async function performFix(code: string, error: string): Promise<void> {
+    const history = buildHistory(messages, { skip: "first" });
+
+    const data = await sendFix({
+      broken_code: code,
+      error,
+      history,
+      fix_attempts: fixAttempts,
+    });
+
+    fixAttempts = [...fixAttempts, { code, error }];
+
+    if (data.mermaid_code) {
+      codeSource = "ai";
+      diagramCode = data.mermaid_code;
+    }
+  }
+
   async function handleRenderError(code: string, error: string) {
     if (codeSource !== "ai" || autoFixPending || isLoading) return;
 
@@ -157,22 +204,7 @@ export function createChatStore() {
 
     try {
       isLoading = true;
-
-      const history = messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .slice(-20)
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const data = await sendFix({
-        broken_code: code,
-        error,
-        history,
-      });
-
-      if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
-      }
+      await performFix(code, error);
     } catch (e: any) {
       messages.push({
         role: "assistant",
@@ -185,23 +217,18 @@ export function createChatStore() {
   }
 
   async function handleFixRequest(code: string, error: string) {
-    if (isLoading) return;
-    isLoading = true;
+    if (isLoading || autoFixPending) return;
+    autoFixCount = 0;
+    fixAttempts = [];
+    autoFixPending = true;
+
     messages.push({
       role: "system",
       content: `Asking AI to fix the code...\n\`${error.split("\n")[0]}\``,
     });
     try {
-      const history = messages
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .slice(-20)
-        .map((m) => ({ role: m.role, content: m.content }));
-
-      const data = await sendFix({ broken_code: code, error, history });
-      if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
-      }
+      isLoading = true;
+      await performFix(code, error);
     } catch (e: any) {
       messages.push({
         role: "assistant",
@@ -209,6 +236,7 @@ export function createChatStore() {
       });
     } finally {
       isLoading = false;
+      autoFixPending = false;
     }
   }
 

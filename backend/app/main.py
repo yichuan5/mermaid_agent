@@ -54,6 +54,7 @@ async def fix(req: FixRequest):
             broken_code=req.broken_code,
             error=req.error,
             history=req.history,
+            fix_attempts=req.fix_attempts,
         )
         return result
     except Exception:

@@ -28,6 +28,7 @@ export interface FixPayload {
     broken_code: string;
     error: string;
     history: { role: string; content: string }[];
+    fix_attempts?: { code: string; error: string }[];
 }
 
 export interface FixResponse {

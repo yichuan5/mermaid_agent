@@ -127,6 +127,7 @@ test('image upload generates a diagram', async ({ page }) => {
 test('stops auto-fixing after max retries when code is invalid', async ({ page }) => {
     let chatRequests = 0;
     let fixRequests = 0;
+    const fixPayloads: any[] = [];
 
     // ── Mock the backend to always return invalid Mermaid code ────
     await page.route('**/api/chat', (route) => {
@@ -142,8 +143,11 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
         });
     });
 
-    await page.route('**/api/fix', (route) => {
+    await page.route('**/api/fix', async (route) => {
         fixRequests++;
+        // Capture the request body to verify fix_attempts history
+        const body = route.request().postDataJSON();
+        fixPayloads.push(body);
         return route.fulfill({
             status: 200,
             contentType: 'application/json',
@@ -181,6 +185,14 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
     // 1 chat request + 3 fix requests
     expect(chatRequests).toBe(1);
     expect(fixRequests).toBe(3);
+
+    // ── Verify fix_attempts accumulates correctly across attempts ──
+    // Attempt 1: no prior history
+    expect(fixPayloads[0].fix_attempts).toHaveLength(0);
+    // Attempt 2: 1 prior attempt
+    expect(fixPayloads[1].fix_attempts).toHaveLength(1);
+    // Attempt 3: 2 prior attempts
+    expect(fixPayloads[2].fix_attempts).toHaveLength(2);
 });
 
 test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
@@ -217,5 +229,201 @@ test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
 
     // Verify the code gets updated
     await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+});
+
+
+test('initial message followed by a follow-up message both render diagrams without errors', async ({ page }) => {
+    let requestCount = 0;
+
+    await page.route('**/api/chat', (route) => {
+        requestCount++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: requestCount === 1
+                    ? 'flowchart TD\n    A[Start] --> B[End]'
+                    : 'flowchart TD\n    A[Start] --> B[Middle] --> C[End]',
+                explanation: requestCount === 1 ? 'First diagram.' : 'Updated diagram.',
+                follow_up_commands: ['Add a step', 'Change direction'],
+            }),
+        });
+    });
+
+    await page.goto('/');
+    await expect(
+        page.locator('.message.assistant .message-bubble').first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // ── First message ────────────────────────────────────────────
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a simple flowchart');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('First diagram.', { timeout: 10_000 });
+    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+
+    // ── Send a follow-up message ─────────────────────────────────
+    await textarea.fill('Add another step in the middle');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(2),
+    ).toContainText('Updated diagram.', { timeout: 10_000 });
+    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+
+    // ── Assert no error messages appeared ────────────────────────
+    const errorMessages = page.locator('.message.assistant .message-bubble').filter({ hasText: 'Error:' });
+    await expect(errorMessages).toHaveCount(0);
+
+    expect(requestCount).toBe(2);
+});
+
+test('follow-up message after fix sends strictly alternating history to the backend', async ({ page }) => {
+    const chatPayloads: any[] = [];
+
+    await page.route('**/api/chat', async (route) => {
+        const body = route.request().postDataJSON();
+        chatPayloads.push(body);
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A[Start] --> B[End]',
+                explanation: chatPayloads.length === 1 ? 'First diagram.' : 'Updated diagram.',
+                follow_up_commands: [],
+            }),
+        });
+    });
+
+    await page.route('**/api/fix', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ mermaid_code: 'flowchart TD\n    A[Fixed] --> B[End]' }),
+        }),
+    );
+
+    await page.goto('/');
+    await expect(
+        page.locator('.message.assistant .message-bubble').first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // ── First chat request ───────────────────────────────────────
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a diagram');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('First diagram.', { timeout: 10_000 });
+
+    // ── Trigger a manual fix via the editor — injects system + assistant messages ──
+    const editor = page.locator('.cm-content');
+    await editor.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('invalid mermaid code');
+
+    const fixBtn = page.locator('.fix-btn');
+    await expect(fixBtn).toBeVisible({ timeout: 10_000 });
+    await fixBtn.click();
+
+    // Wait for the fixed diagram SVG and for loading to clear
+    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.thinking-badge')).not.toBeVisible({ timeout: 5_000 });
+
+    // ── Send follow-up — this was what triggered the 500 ─────────
+    await textarea.fill('Now add a third node');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').last(),
+    ).toContainText('Updated diagram.', { timeout: 10_000 });
+
+    // ── No error messages ─────────────────────────────────────────
+    const errorMessages = page.locator('.message.assistant .message-bubble').filter({ hasText: 'Error:' });
+    await expect(errorMessages).toHaveCount(0);
+
+    // ── Key assertion: history must strictly alternate user / assistant ──
+    expect(chatPayloads.length).toBeGreaterThanOrEqual(2);
+    const history: { role: string }[] = chatPayloads[chatPayloads.length - 1].history ?? [];
+    for (let i = 1; i < history.length; i++) {
+        expect(
+            history[i].role,
+            `History entry ${i} ("${history[i].role}") must not follow entry ${i - 1} ("${history[i - 1].role}")`
+        ).not.toBe(history[i - 1].role);
+    }
+});
+test('history sent to /api/fix always starts with a user message, never an assistant', async ({ page }) => {
+    const fixPayloads: any[] = [];
+
+    // First chat returns valid code so we get a proper conversation turn in history
+    await page.route('**/api/chat', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A[Start] --> B[End]',
+                explanation: 'Here is your diagram.',
+                follow_up_commands: [],
+            }),
+        }),
+    );
+
+    await page.route('**/api/fix', async (route) => {
+        const body = route.request().postDataJSON();
+        fixPayloads.push(body);
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ mermaid_code: 'flowchart TD\n    A[Fixed] --> B[End]' }),
+        });
+    });
+
+    await page.goto('/');
+    await expect(
+        page.locator('.message.assistant .message-bubble').first(),
+    ).toBeVisible({ timeout: 10_000 });
+
+    // ── Send a chat message to populate history ──────────────────
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw me a diagram');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('Here is your diagram.', { timeout: 10_000 });
+
+    // ── Corrupt the editor to trigger the Fix with AI button ─────
+    const editor = page.locator('.cm-content');
+    await editor.click();
+    await page.keyboard.press('Control+a');
+    await page.keyboard.type('not valid mermaid at all ###');
+
+    const fixBtn = page.locator('.fix-btn');
+    await expect(fixBtn).toBeVisible({ timeout: 10_000 });
+    await fixBtn.click();
+
+    await expect(page.locator('.thinking-badge')).not.toBeVisible({ timeout: 10_000 });
+    expect(fixPayloads.length).toBeGreaterThanOrEqual(1);
+
+    // ── Key assertion: history must start with "user", never "assistant" ──
+    for (const payload of fixPayloads) {
+        const history: { role: string }[] = payload.history ?? [];
+        if (history.length > 0) {
+            expect(
+                history[0].role,
+                'History sent to /api/fix must start with a user message — the assistant greeting must be excluded',
+            ).toBe('user');
+        }
+        for (let i = 1; i < history.length; i++) {
+            expect(
+                history[i].role,
+                `Fix history entry ${i} ("${history[i].role}") must not follow entry ${i - 1} ("${history[i - 1].role}")`,
+            ).not.toBe(history[i - 1].role);
+        }
+    }
 });
 

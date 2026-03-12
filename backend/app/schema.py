@@ -13,10 +13,16 @@ class ChatRequest(BaseModel):
     history: list[HistoryMessage] = Field(default=[], max_length=100)
 
 
+class FixAttempt(BaseModel):
+    code: str = Field(max_length=50000, description="The previous, failed Mermaid code")
+    error: str = Field(max_length=5000, description="The error message that resulted from the code")
+
+
 class FixRequest(BaseModel):
     broken_code: str = Field(max_length=50000)
     error: str = Field(max_length=5000)
     history: list[HistoryMessage] = Field(default=[], max_length=100)
+    fix_attempts: list[FixAttempt] = Field(default=[], max_length=10, description="Previous failed attempts to fix this diagram")
 
 
 class ChatResponse(BaseModel):
