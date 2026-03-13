@@ -42,16 +42,13 @@ DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid" / "syntax"
 DiagramType = Literal[
     "architecture",
     "block",
-    "c4",
     "classDiagram",
     "entityRelationshipDiagram",
     "examples",
     "flowchart",
     "gantt",
-    "gitgraph",
     "kanban",
     "mindmap",
-    "packet",
     "pie",
     "quadrantChart",
     "radar",
@@ -63,7 +60,6 @@ DiagramType = Literal[
     "treemap",
     "userJourney",
     "xyChart",
-    "zenuml",
 ]
 
 mermaid_agent = Agent(

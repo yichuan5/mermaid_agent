@@ -82,6 +82,7 @@
       isLoading={chat.isLoading}
       onSubmit={chat.handleUserSubmit}
       onImageUpload={chat.handleImageUpload}
+      onChartTypeChange={chat.handleChartTypeChange}
     />
 
     <div

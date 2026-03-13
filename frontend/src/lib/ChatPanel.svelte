@@ -7,12 +7,47 @@
     isLoading,
     onSubmit,
     onImageUpload,
+    onChartTypeChange,
   }: {
     messages: Message[];
     isLoading: boolean;
     onSubmit: (text: string) => void;
     onImageUpload: (file: File, message: string) => void;
+    onChartTypeChange?: (type: string) => void;
   } = $props();
+
+  const chartTypes = [
+    { value: "auto", label: "Auto" },
+    { value: "flowchart", label: "Flowchart" },
+    { value: "sequence", label: "Sequence" },
+    { value: "architecture", label: "Architecture" },
+    { value: "block", label: "Block" },
+    { value: "class", label: "Class" },
+    { value: "er", label: "Entity Relation" },
+    { value: "gantt", label: "Gantt" },
+    { value: "kanban", label: "Kanban" },
+    { value: "mindmap", label: "Mind Map" },
+    { value: "pie", label: "Pie" },
+    { value: "quadrant", label: "Quadrant Chart" },
+    { value: "radar", label: "Radar" },
+    { value: "requirement", label: "Requirement" },
+    { value: "sankey", label: "Sankey" },
+    { value: "state", label: "State" },
+    { value: "timeline", label: "Timeline" },
+    { value: "treemap", label: "Treemap" },
+    { value: "userjourney", label: "User Journey" },
+    { value: "xychart", label: "XY Chart" },
+  ];
+
+  let selectedType = $state("auto");
+
+  function handleTypeChange(e: Event) {
+    const value = (e.target as HTMLSelectElement).value;
+    selectedType = value;
+    if (value !== "auto") {
+      onChartTypeChange?.(value);
+    }
+  }
 
   let inputText = $state("");
   let messagesEl: HTMLDivElement;
@@ -100,7 +135,19 @@
 <section class="panel chat-panel">
   <div class="panel-header">
     <span class="panel-icon"></span>
-    <h2>AI Assistant</h2>
+    <div class="chart-type-selector">
+      <label for="chart-type-select" class="chart-type-label">Chart Type</label>
+      <select
+        id="chart-type-select"
+        class="chart-type-dropdown"
+        value={selectedType}
+        onchange={handleTypeChange}
+      >
+        {#each chartTypes as ct}
+          <option value={ct.value}>{ct.label}</option>
+        {/each}
+      </select>
+    </div>
     {#if isLoading}
       <span class="thinking-badge">thinking…</span>
     {/if}
@@ -253,3 +300,55 @@
     </div>
   </form>
 </section>
+
+<style>
+  .chart-type-selector {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+
+  .chart-type-label {
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+    color: var(--text-muted, #a0aec0);
+    white-space: nowrap;
+  }
+
+  .chart-type-dropdown {
+    background: var(--surface-2, #1e2433);
+    color: var(--text-primary, #e2e8f0);
+    border: 1px solid var(--border, rgba(255, 255, 255, 0.1));
+    border-radius: 6px;
+    padding: 4px 28px 4px 10px;
+    font-size: 12px;
+    font-family: inherit;
+    cursor: pointer;
+    outline: none;
+    appearance: none;
+    -webkit-appearance: none;
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23a0aec0'/%3E%3C/svg%3E");
+    background-repeat: no-repeat;
+    background-position: right 9px center;
+    transition:
+      border-color 0.15s ease,
+      box-shadow 0.15s ease;
+  }
+
+  .chart-type-dropdown:hover {
+    border-color: var(--accent, #7c6af7);
+  }
+
+  .chart-type-dropdown:focus {
+    border-color: var(--accent, #7c6af7);
+    box-shadow: 0 0 0 2px rgba(124, 106, 247, 0.25);
+  }
+
+  .chart-type-dropdown option {
+    background: #1a1f2e;
+    color: #e2e8f0;
+  }
+</style>

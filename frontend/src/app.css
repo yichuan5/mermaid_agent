@@ -316,8 +316,7 @@ body {
 
 /* Thinking badge in header */
 .thinking-badge {
-    margin-left: auto;
-    font-size: 11px;
+    font-size: 14px;
     color: var(--accent-light);
     animation: pulse-opacity 1.2s ease-in-out infinite;
 }

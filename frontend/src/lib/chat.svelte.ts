@@ -1,5 +1,6 @@
 import type { Message } from "$lib/types";
 import { sendChat, sendFix, sendImage } from "$lib/api";
+import { CHART_SAMPLES } from "$lib/chartSamples";
 
 /**
  * Build a conversation history suitable for the backend.
@@ -32,28 +33,11 @@ function buildHistory(
   return deduped.slice(-20);
 }
 
-const DEFAULT_DIAGRAM = `---
-config:
-  look: handDrawn
----
-flowchart TD
-    Start([Start])
-    Start --> Describe[Describe Diagram]
-    Start --> Upload[Upload Image]
-
-    Describe --> AI[[AI Agent]]
-    Upload --> AI
-
-    AI --> Code[Mermaid Code]
-    Code --> Preview[Live Preview]
-
-    %% Feedback Loops
-    Code -- "iterate/feedback" --> AI`;
 
 const MAX_AUTO_FIX = 3;
 
 export function createChatStore() {
-  let diagramCode = $state(DEFAULT_DIAGRAM);
+  let diagramCode = $state(CHART_SAMPLES["flowchart"]);
   let codeSource: "ai" | "user" = $state("user");
   let autoFixPending = $state(false);
   let autoFixCount = $state(0);
@@ -63,7 +47,7 @@ export function createChatStore() {
     {
       role: "assistant",
       content:
-        "Hi! I'm your Mermaid diagram assistant. Describe a diagram in detail and I'll generate it for you.",
+        "Hi! I'm your Mermaid diagram assistant. Describe a diagram in detail and I'll draft it for you.",
     },
   ]);
   let isLoading = $state(false);
@@ -81,7 +65,7 @@ export function createChatStore() {
     try {
       const history = buildHistory(messages, { skip: "both" });
 
-      if (contextDiagram === DEFAULT_DIAGRAM) {
+      if (contextDiagram === CHART_SAMPLES["flowchart"]) {
         contextDiagram = null;
       }
 
@@ -240,6 +224,14 @@ export function createChatStore() {
     }
   }
 
+  function handleChartTypeChange(type: string) {
+    const sample = CHART_SAMPLES[type];
+    if (sample) {
+      codeSource = "user";
+      diagramCode = sample;
+    }
+  }
+
   return {
     get diagramCode() { return diagramCode; },
     get messages() { return messages; },
@@ -250,5 +242,6 @@ export function createChatStore() {
     handleCodeChange,
     handleRenderError,
     handleFixRequest,
+    handleChartTypeChange,
   };
 }
