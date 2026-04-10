@@ -386,20 +386,20 @@
   </div>
 
   <div class="panel-header">
-    {#if activeTab === "mermaid"}
-      <button
-        class="theme-toggle"
-        onclick={togglePreviewMode}
-        title={previewDark ? "Switch to light mode" : "Switch to dark mode"}
-        aria-label={previewDark ? "Switch to light mode" : "Switch to dark mode"}
-      >
-        <span class="theme-toggle-track" class:light={!previewDark}>
-          <span class="theme-toggle-icon">{previewDark ? "🌙" : "☀️"}</span>
-          <span class="theme-toggle-thumb" class:light={!previewDark}></span>
-        </span>
-      </button>
+    <button
+      class="theme-toggle"
+      onclick={togglePreviewMode}
+      title={previewDark ? "Switch to light mode" : "Switch to dark mode"}
+      aria-label={previewDark ? "Switch to light mode" : "Switch to dark mode"}
+    >
+      <span class="theme-toggle-track" class:light={!previewDark}>
+        <span class="theme-toggle-icon">{previewDark ? "🌙" : "☀️"}</span>
+        <span class="theme-toggle-thumb" class:light={!previewDark}></span>
+      </span>
+    </button>
 
-      <div class="download-wrapper" bind:this={downloadBtnEl}>
+    <div class="download-wrapper" bind:this={downloadBtnEl}>
+      {#if activeTab === "mermaid"}
         <button
           class="download-btn"
           onclick={() => (showDownloadMenu = !showDownloadMenu)}
@@ -423,33 +423,37 @@
             </button>
           </div>
         {/if}
-      </div>
-
-      <div class="zoom-controls">
-        <button class="zoom-btn" onclick={() => (zoom = Math.max(ZOOM_MIN, zoom - ZOOM_STEP * 2))} title="Zoom out">−</button>
-        <button class="zoom-reset" onclick={resetView} title="Reset view">{zoomPct}%</button>
-        <button class="zoom-btn" onclick={() => (zoom = Math.min(ZOOM_MAX, zoom + ZOOM_STEP * 2))} title="Zoom in">+</button>
-      </div>
-
-      {#if renderError}
-        <span class="error-badge">Syntax error</span>
-      {/if}
-    {:else}
-      {#if enhancedImage}
-        <button class="download-btn" onclick={downloadEnhancedImage} title="Download enhanced image">
+      {:else}
+        <button
+          class="download-btn"
+          onclick={downloadEnhancedImage}
+          title="Download enhanced image"
+          aria-label="Download enhanced image"
+          disabled={!enhancedImage}
+        >
           <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
             <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
             <polyline points="7 10 12 15 17 10" />
             <line x1="12" y1="15" x2="12" y2="3" />
           </svg>
         </button>
-
-        <div class="zoom-controls">
-          <button class="zoom-btn" onclick={() => (enhancedZoom = Math.max(ZOOM_MIN, enhancedZoom - ZOOM_STEP * 2))} title="Zoom out">−</button>
-          <button class="zoom-reset" onclick={resetEnhancedView} title="Reset view">{enhancedZoomPct}%</button>
-          <button class="zoom-btn" onclick={() => (enhancedZoom = Math.min(ZOOM_MAX, enhancedZoom + ZOOM_STEP * 2))} title="Zoom in">+</button>
-        </div>
       {/if}
+    </div>
+
+    <div class="zoom-controls">
+      {#if activeTab === "mermaid"}
+        <button class="zoom-btn" onclick={() => (zoom = Math.max(ZOOM_MIN, zoom - ZOOM_STEP * 2))} title="Zoom out">−</button>
+        <button class="zoom-reset" onclick={resetView} title="Reset view">{zoomPct}%</button>
+        <button class="zoom-btn" onclick={() => (zoom = Math.min(ZOOM_MAX, zoom + ZOOM_STEP * 2))} title="Zoom in">+</button>
+      {:else}
+        <button class="zoom-btn" onclick={() => (enhancedZoom = Math.max(ZOOM_MIN, enhancedZoom - ZOOM_STEP * 2))} title="Zoom out" disabled={!enhancedImage}>−</button>
+        <button class="zoom-reset" onclick={resetEnhancedView} title="Reset view" disabled={!enhancedImage}>{enhancedZoomPct}%</button>
+        <button class="zoom-btn" onclick={() => (enhancedZoom = Math.min(ZOOM_MAX, enhancedZoom + ZOOM_STEP * 2))} title="Zoom in" disabled={!enhancedImage}>+</button>
+      {/if}
+    </div>
+
+    {#if activeTab === "mermaid" && renderError}
+      <span class="error-badge">Syntax error</span>
     {/if}
   </div>
 

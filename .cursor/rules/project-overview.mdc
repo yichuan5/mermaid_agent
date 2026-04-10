@@ -21,18 +21,17 @@ AI-powered Mermaid diagram generator with live editing, auto-fix, and image enha
 ```
 WebSocket flow (primary):
 User chat → WS /api/chat/ws → unified_agent (Gemini)
-  ← tool_request: render_and_capture(code) → frontend renders + captures screenshot
-  → tool_result: {image: base64} or {error: msg}
-  (agent fixes code and retries if error)
-  ← tool_request: capture_screenshot → frontend captures current diagram
-  → calls enhance_diagram tool (Gemini image gen)
-  ← enhanced_image, message, done
+  Agent decides which tools to call:
+  - edit_diagram: sends tool_request: render_and_capture(code) → frontend renders + captures screenshot
+    → tool_result: {image: base64} or {error: msg}
+    (agent fixes code and retries if error)
+  - enhance_diagram: captures screenshot via tool_request → calls Gemini image gen
+    ← enhanced_image
+  - read_mermaid_syntax / read_mermaid_config: server-side doc lookup
+  ← message (explanation + follow_up_commands), done
 
-Legacy REST (backward compat):
-POST /api/chat → mermaid_agent → mermaid_code + explanation
-POST /api/fix  → fix_agent     → corrected code
-POST /api/chat/image → convert_agent → code from image
-POST /api/enhance → enhance_image   → enhanced PNG or null
+Agent does NOT return mermaid_code in the final response. Code delivery
+happens solely through the edit_diagram tool (render_and_capture client tool).
 ```
 
 ## Deployment
@@ -48,7 +47,7 @@ POST /api/enhance → enhance_image   → enhanced PNG or null
 | File | What it does |
 |------|-------------|
 | `app/main.py` | WebSocket endpoint `/api/chat/ws` + legacy REST routes |
-| `app/schema.py` | Request/response Pydantic models (`ChatRequest`, `ChatResponse`, etc.) |
+| `app/schema.py` | Response Pydantic model (`ChatResponse`: explanation + follow_up_commands, no mermaid_code) |
 | `app/services/agent.py` | `AgentDeps` (WS tool bridge), `unified_agent` with 4 tools, legacy agents for REST |
 | `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT` (unified), `LEGACY_SYSTEM_PROMPT`, `FIX_PROMPT`, etc. |
 | `app/services/doc_fetcher.py` | Fetches Mermaid syntax docs from GitHub into `app/docs/` at startup |
@@ -69,11 +68,11 @@ POST /api/enhance → enhance_image   → enhanced PNG or null
 ## Important Patterns
 
 - **Svelte 5 runes**: All state uses `$state()`, `$effect()`, `$props()` — no legacy `$:` or stores
-- **Unified agent loop**: Server runs one `pydantic-ai` agent with 4 tools. Client-side tools (`render_and_capture`, `capture_screenshot`) execute via WS tool_request/tool_result protocol. Auto-fix is handled by the agent (it sees render errors and retries).
+- **Unified agent loop**: Server runs one `pydantic-ai` agent with 4 tools. Code editing is a tool (`edit_diagram`) not a default output — the agent chooses whether to edit code, enhance visually, or just respond with text. Client-side tools (`render_and_capture`, `capture_screenshot`) execute via WS tool_request/tool_result protocol. Auto-fix is handled by the agent (it sees render errors and retries).
 - **AgentDeps**: Dataclass injected via `RunContext[AgentDeps]`. Contains the WebSocket + pending tool futures. `request_client_tool()` sends a WS message and awaits the response via `asyncio.Future`.
 - **Tab content persistence**: Preview uses `style:display` (not `{#if}`) so both Mermaid SVG and Enhanced panels stay in DOM
 - **Editor focus → Mermaid tab**: Clicking/focusing the code editor automatically switches the preview to the Mermaid tab
-- **Agent tools**: `read_mermaid_syntax`, `read_mermaid_config` (server-side docs), `render_and_capture` (client-side), `enhance_diagram` (server-side image gen)
+- **Agent tools**: `read_mermaid_syntax`, `read_mermaid_config` (server-side docs), `edit_diagram` (renders code via client-side `render_and_capture`), `enhance_diagram` (server-side image gen)
 - **No Enhance button**: Enhancement is triggered by the agent when appropriate (user asks via chat). No manual Enhance button in the UI.
 
 ## Tests

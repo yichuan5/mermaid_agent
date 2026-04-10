@@ -28,12 +28,11 @@ async function mockWebSocket(
 }
 
 /**
- * Convenience: mock a simple WS turn that replies with mermaid_code + explanation.
+ * Convenience: mock a simple WS turn that replies with just text (no diagram edit).
  */
 async function mockSimpleWsReply(
     page: Page,
     reply: {
-        mermaid_code?: string;
         explanation?: string;
         follow_up_commands?: string[];
     },
@@ -43,7 +42,38 @@ async function mockSimpleWsReply(
             ws.send(JSON.stringify({
                 type: 'message',
                 content: reply.explanation ?? '',
-                mermaid_code: reply.mermaid_code ?? null,
+                follow_up_commands: reply.follow_up_commands ?? [],
+            }));
+            ws.send(JSON.stringify({ type: 'done' }));
+        }
+    });
+}
+
+/**
+ * Mock a WS turn that simulates the edit_diagram tool flow:
+ * sends a render_and_capture tool request, waits for the client's tool_result,
+ * then sends the final message.
+ */
+async function mockWsWithDiagram(
+    page: Page,
+    reply: {
+        mermaid_code: string;
+        explanation?: string;
+        follow_up_commands?: string[];
+    },
+) {
+    await mockWebSocket(page, (msg, ws) => {
+        if (msg.type === 'user_message' || msg.type === 'image_upload') {
+            ws.send(JSON.stringify({
+                type: 'tool_request',
+                id: 'tool-' + Math.random().toString(36).slice(2),
+                name: 'render_and_capture',
+                args: { mermaid_code: reply.mermaid_code },
+            }));
+        } else if (msg.type === 'tool_result') {
+            ws.send(JSON.stringify({
+                type: 'message',
+                content: reply.explanation ?? '',
                 follow_up_commands: reply.follow_up_commands ?? [],
             }));
             ws.send(JSON.stringify({ type: 'done' }));
@@ -55,7 +85,7 @@ async function mockSimpleWsReply(
 // ── Tests ───────────────────────────────────────────────────────
 
 test('sending a message displays AI response and renders a diagram', async ({ page }) => {
-    await mockSimpleWsReply(page, {
+    await mockWsWithDiagram(page, {
         mermaid_code: 'flowchart TD\n    A[Hello] --> B[World]',
         explanation: 'Here is a simple flowchart.',
         follow_up_commands: ['Add more nodes'],
@@ -104,7 +134,7 @@ test('shows error message when agent returns an error', async ({ page }) => {
 });
 
 test('image upload generates a diagram', async ({ page }) => {
-    await mockSimpleWsReply(page, {
+    await mockWsWithDiagram(page, {
         mermaid_code: 'flowchart LR\n    X[From Image] --> Y[Converted]',
         explanation: 'I converted your image to a Mermaid diagram.',
     });
@@ -148,9 +178,15 @@ test('clicking Fix with AI button sends a fix request via WebSocket', async ({ p
         if (msg.type === 'user_message') {
             wsPayloads.push(msg);
             ws.send(JSON.stringify({
+                type: 'tool_request',
+                id: 'fix-tool-' + Math.random().toString(36).slice(2),
+                name: 'render_and_capture',
+                args: { mermaid_code: 'flowchart TD\n    A[Fixed]' },
+            }));
+        } else if (msg.type === 'tool_result') {
+            ws.send(JSON.stringify({
                 type: 'message',
                 content: 'Fixed the diagram.',
-                mermaid_code: 'flowchart TD\n    A[Fixed]',
                 follow_up_commands: [],
             }));
             ws.send(JSON.stringify({ type: 'done' }));
@@ -180,13 +216,20 @@ test('follow-up messages both render diagrams', async ({ page }) => {
     await mockWebSocket(page, (msg, ws) => {
         if (msg.type === 'user_message') {
             requestCount++;
+            const code = requestCount === 1
+                ? 'flowchart TD\n    A[Start] --> B[End]'
+                : 'flowchart TD\n    A[Start] --> B[Middle] --> C[End]';
+            ws.send(JSON.stringify({
+                type: 'tool_request',
+                id: 'tool-' + requestCount,
+                name: 'render_and_capture',
+                args: { mermaid_code: code },
+            }));
+        } else if (msg.type === 'tool_result') {
             const isFirst = requestCount === 1;
             ws.send(JSON.stringify({
                 type: 'message',
                 content: isFirst ? 'First diagram.' : 'Updated diagram.',
-                mermaid_code: isFirst
-                    ? 'flowchart TD\n    A[Start] --> B[End]'
-                    : 'flowchart TD\n    A[Start] --> B[Middle] --> C[End]',
                 follow_up_commands: ['Add a step'],
             }));
             ws.send(JSON.stringify({ type: 'done' }));
@@ -238,7 +281,6 @@ test('chart_type is included in WebSocket payload', async ({ page }) => {
             ws.send(JSON.stringify({
                 type: 'message',
                 content: 'A sequence diagram.',
-                mermaid_code: 'sequenceDiagram\n    A->>B: Hello',
                 follow_up_commands: [],
             }));
             ws.send(JSON.stringify({ type: 'done' }));
@@ -310,15 +352,13 @@ test('WebSocket enhanced_image event switches to AI Enhanced tab', async ({ page
     await mockWebSocket(page, (msg, ws) => {
         if (msg.type === 'user_message') {
             ws.send(JSON.stringify({
-                type: 'message',
-                content: 'Here is your diagram with enhancement.',
-                mermaid_code: 'flowchart TD\n    A[Hello] --> B[World]',
-                follow_up_commands: [],
-            }));
-            // Simulate the agent sending an enhanced image
-            ws.send(JSON.stringify({
                 type: 'enhanced_image',
                 image: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+            }));
+            ws.send(JSON.stringify({
+                type: 'message',
+                content: 'Here is your diagram with enhancement.',
+                follow_up_commands: [],
             }));
             ws.send(JSON.stringify({ type: 'done' }));
         }
@@ -349,9 +389,15 @@ test('follow-up message after fix sends history via WebSocket', async ({ page })
             requestCount++;
             wsPayloads.push(msg);
             ws.send(JSON.stringify({
+                type: 'tool_request',
+                id: 'tool-' + requestCount,
+                name: 'render_and_capture',
+                args: { mermaid_code: 'flowchart TD\n    A[Start] --> B[End]' },
+            }));
+        } else if (msg.type === 'tool_result') {
+            ws.send(JSON.stringify({
                 type: 'message',
                 content: requestCount === 1 ? 'First diagram.' : 'Updated diagram.',
-                mermaid_code: 'flowchart TD\n    A[Start] --> B[End]',
                 follow_up_commands: [],
             }));
             ws.send(JSON.stringify({ type: 'done' }));

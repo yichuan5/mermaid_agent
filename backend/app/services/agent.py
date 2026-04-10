@@ -283,16 +283,18 @@ async def read_mermaid_config(
 
 
 @unified_agent.tool
-async def render_and_capture(
+async def create_mermaid_diagram(
     ctx: RunContext[AgentDeps], mermaid_code: str
 ) -> str:
-    """Render a Mermaid diagram in the user's browser and capture a screenshot.
+    """Create or modify a Mermaid diagram. Pass the complete Mermaid code.
 
+    The code is rendered in the user's browser and a screenshot is captured.
     Returns JSON with either:
     - {"image": "<base64 PNG>"} on success
     - {"error": "<error message>"} on render failure
 
-    If rendering fails, fix the code and try again (up to 3 total attempts).
+    If rendering fails, fix the code and call this tool again.
+    Only call this when the diagram code needs to change.
     """
     await ctx.deps.ws.send_json(
         {"type": "status", "message": "Rendering diagram…"}

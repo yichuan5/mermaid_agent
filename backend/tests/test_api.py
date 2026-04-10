@@ -14,7 +14,6 @@ def client():
 
 
 MOCK_LLM = {
-    "mermaid_code": "flowchart TD\n    A --> B",
     "explanation": "A simple diagram.",
     "follow_up_commands": ["Add more nodes?"],
 }
@@ -27,7 +26,6 @@ class TestWebSocket:
     @patch("app.main.run_unified_agent", new_callable=AsyncMock)
     def test_ws_user_message(self, mock_agent, client):
         mock_agent.return_value = {
-            "mermaid_code": "flowchart TD\n    A --> B",
             "explanation": "Here's a flowchart.",
             "follow_up_commands": ["Add node C"],
         }
@@ -53,13 +51,11 @@ class TestWebSocket:
 
             result_msg = next(m for m in messages if m["type"] == "message")
             assert result_msg["content"] == "Here's a flowchart."
-            assert result_msg["mermaid_code"] == "flowchart TD\n    A --> B"
             assert result_msg["follow_up_commands"] == ["Add node C"]
 
     @patch("app.main.run_unified_agent", new_callable=AsyncMock)
     def test_ws_image_upload(self, mock_agent, client):
         mock_agent.return_value = {
-            "mermaid_code": "flowchart TD\n    X --> Y",
             "explanation": "Converted from image.",
             "follow_up_commands": [],
         }
@@ -81,7 +77,7 @@ class TestWebSocket:
                     break
 
             result_msg = next(m for m in messages if m["type"] == "message")
-            assert result_msg["mermaid_code"] == "flowchart TD\n    X --> Y"
+            assert result_msg["content"] == "Converted from image."
 
     def test_ws_unknown_type_returns_error(self, client):
         with client.websocket_connect("/api/chat/ws") as ws:

@@ -96,7 +96,6 @@ async def chat_ws(ws: WebSocket):
                 "type": "message",
                 "content": result.get("explanation", ""),
                 "follow_up_commands": result.get("follow_up_commands", []),
-                "mermaid_code": result.get("mermaid_code"),
             })
         except asyncio.CancelledError:
             logger.info("Agent task cancelled by client stop request")

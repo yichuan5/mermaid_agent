@@ -82,21 +82,12 @@ export function createChatStore() {
         statusMessage = msg || null;
       },
 
-      onMermaidCode(code: string) {
-        codeSource = "ai";
-        diagramCode = code;
-      },
-
       onEnhancedImage(image: string) {
         enhancedImage = image;
         activePreviewTab = "enhanced";
       },
 
-      onMessage(content: string, followUpCommands: string[], mermaidCode: string | null) {
-        if (mermaidCode) {
-          codeSource = "ai";
-          diagramCode = mermaidCode;
-        }
+      onMessage(content: string, followUpCommands: string[]) {
         messages.push({
           role: "assistant",
           content,
@@ -183,12 +174,20 @@ export function createChatStore() {
     }
   }
 
+  function clearFollowUps() {
+    for (const m of messages) {
+      m.followUpSuggestions = undefined;
+    }
+  }
+
   function handleUserSubmit(text: string) {
+    clearFollowUps();
     messages.push({ role: "user", content: text });
     sendChatRequest(text, diagramCode);
   }
 
   async function handleImageUpload(file: File, userMessage: string) {
+    clearFollowUps();
     const previewUrl = URL.createObjectURL(file);
     messages.push({
       role: "user",

@@ -12,9 +12,8 @@
 
 export interface WsCallbacks {
     onStatus: (message: string) => void;
-    onMermaidCode: (code: string) => void;
     onEnhancedImage: (image: string) => void;
-    onMessage: (content: string, followUpCommands: string[], mermaidCode: string | null) => void;
+    onMessage: (content: string, followUpCommands: string[]) => void;
     onError: (message: string) => void;
     onDone: () => void;
     /** Render mermaid code in the browser, return screenshot or error. */
@@ -110,7 +109,6 @@ export function sendWsMessage(
                     callbacks.onMessage(
                         msg.content ?? "",
                         msg.follow_up_commands ?? [],
-                        msg.mermaid_code ?? null,
                     );
                     break;
 
