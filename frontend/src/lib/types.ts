@@ -3,4 +3,5 @@ export interface Message {
     content: string;
     imageUrl?: string;
     followUpSuggestions?: string[];
+    _fixNotice?: boolean;
 }

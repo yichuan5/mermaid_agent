@@ -20,6 +20,7 @@ MOCK_LLM = {
     "mermaid_code": "flowchart TD\n    A --> B",
     "explanation": "A simple diagram.",
     "follow_up_commands": ["Add more nodes?"],
+    "enhance_instructions": None,
 }
 
 
@@ -75,6 +76,28 @@ class TestChatEndpoint:
     def test_missing_message_field_returns_422(self, client):
         resp = client.post("/api/chat", json={})
         assert resp.status_code == 422  # Pydantic validation error
+
+
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock)
+    def test_enhance_routing_returns_instructions(self, mock_ai, client):
+        mock_ai.return_value = {
+            "mermaid_code": None,
+            "explanation": "The layout needs improvement.",
+            "follow_up_commands": [],
+            "enhance_instructions": "Spread out the nodes to reduce overlapping labels",
+        }
+        resp = client.post(
+            "/api/chat",
+            json={
+                "message": "Fix the overlapping nodes",
+                "current_mermaid_code": "flowchart TD\n    A --> B",
+                "history": [],
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["mermaid_code"] is None
+        assert data["enhance_instructions"] == "Spread out the nodes to reduce overlapping labels"
 
 
 # ── POST /api/chat/image ────────────────────────────────────────

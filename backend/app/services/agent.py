@@ -382,11 +382,13 @@ async def enhance_image(
     explanation = ""
 
     if response.candidates:
+        text_parts: list[str] = []
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
                 enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
             elif part.text:
-                explanation += part.text
+                text_parts.append(part.text)
+        explanation = "\n\n".join(text_parts)
 
     if not explanation:
         explanation = "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."

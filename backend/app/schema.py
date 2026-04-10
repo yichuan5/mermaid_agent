@@ -37,6 +37,10 @@ class ChatResponse(BaseModel):
         default=[],
         description="Choices to modify the diagram in the form of specific actionable commands.",
     )
+    enhance_instructions: str | None = Field(
+        default=None,
+        description="If the user's request is about visual layout, spacing, or appearance improvements that cannot be solved by changing the Mermaid code, set this to specific instructions for the image enhancement agent. When set without mermaid_code, the code will not be changed and only visual enhancement will run.",
+    )
 
 
 class FixResponse(BaseModel):

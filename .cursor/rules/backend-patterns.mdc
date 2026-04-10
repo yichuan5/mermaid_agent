@@ -1,0 +1,35 @@
+---
+description: Backend conventions — FastAPI routes, Pydantic AI agents, Gemini integration
+globs: backend/**/*.py
+alwaysApply: false
+---
+
+# Backend Patterns
+
+## Adding a new endpoint
+
+1. Define request/response models in `app/schema.py` using Pydantic `BaseModel`
+2. Add the service function in `app/services/agent.py`
+3. Add the route in `app/main.py` with proper error handling
+4. Add tests in `tests/test_api.py` using `TestClient` + `unittest.mock.patch`
+
+## Agent architecture
+
+- Text agents (`mermaid_agent`, `fix_agent`, `convert_agent`) use **pydantic-ai** `Agent` with `GoogleModel`
+- Image generation (`enhance_image`) reuses `GoogleProvider.client` (the underlying `google-genai` client) directly — pydantic-ai doesn't support image output
+- All agents share one `GoogleProvider` instance initialized at module level
+- Agent tools are registered with `@agent.tool` decorator and can access Mermaid docs from `app/docs/`
+- **Enhance routing**: `mermaid_agent` acts as a router — its `ChatResponse` includes an optional `enhance_instructions` field. For visual/layout requests, it sets `enhance_instructions` (and optionally `mermaid_code=None` to skip code changes). The frontend uses this to trigger the enhance agent with specific instructions. The `/api/enhance` endpoint remains independently callable for manual enhancement.
+
+## Testing
+
+```python
+# Mock pattern for agent service functions:
+@patch("app.main.generate_mermaid", new_callable=AsyncMock)
+async def test_chat(self, mock_gen):
+    mock_gen.return_value = {"mermaid_code": "...", "explanation": "..."}
+    resp = self.client.post("/api/chat", json={...})
+```
+
+- Run: `cd backend && uv run pytest -v`
+- Tests use `httpx.ASGITransport` with the FastAPI app directly (no server needed)

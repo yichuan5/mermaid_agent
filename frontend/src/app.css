@@ -230,9 +230,47 @@ body {
     border-radius: var(--radius-md);
     font-size: 13.5px;
     line-height: 1.6;
-    white-space: pre-wrap;
     word-break: break-word;
     animation: slide-in 0.2s ease-out;
+}
+
+.message-bubble p {
+    margin: 0 0 8px;
+}
+
+.message-bubble p:last-child {
+    margin-bottom: 0;
+}
+
+.message-bubble code {
+    background: rgba(255, 255, 255, 0.08);
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-size: 0.9em;
+    font-family: "JetBrains Mono", "Fira Code", monospace;
+}
+
+.message-bubble pre {
+    background: rgba(0, 0, 0, 0.3);
+    border-radius: var(--radius-sm);
+    padding: 8px 10px;
+    margin: 6px 0;
+    overflow-x: auto;
+    font-size: 12px;
+}
+
+.message-bubble pre code {
+    background: none;
+    padding: 0;
+}
+
+.message-bubble strong {
+    font-weight: 600;
+}
+
+.message-bubble a {
+    color: var(--accent-light);
+    text-decoration: underline;
 }
 
 @keyframes slide-in {
@@ -277,6 +315,7 @@ body {
     border-radius: var(--radius-md);
     padding: 8px 12px;
     font-style: italic;
+    white-space: pre-wrap;
 }
 
 /* --- Suggestion Chips --- */
@@ -1179,6 +1218,8 @@ body {
 /* --- Enhanced Image View --- */
 .enhanced-container {
     background: var(--bg-base);
+    align-items: center;
+    justify-content: center;
 }
 
 .enhanced-wrapper {
@@ -1200,8 +1241,6 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    height: 100%;
     gap: 16px;
     color: var(--text-secondary);
     font-size: 14px;
@@ -1220,8 +1259,6 @@ body {
     display: flex;
     flex-direction: column;
     align-items: center;
-    justify-content: center;
-    height: 100%;
     gap: 8px;
     color: var(--text-muted);
     font-size: 14px;

@@ -1,0 +1,50 @@
+---
+description: Frontend conventions — Svelte 5 runes, component patterns, state management
+globs: frontend/src/**/*.{svelte,ts}
+alwaysApply: false
+---
+
+# Frontend Patterns
+
+## State management
+
+All state lives in `lib/chat.svelte.ts` via `createChatStore()`. Uses Svelte 5 runes exclusively:
+
+```typescript
+let messages: Message[] = $state([...]);
+let mode: Mode = $state("auto");
+// Exposed as properties on the returned object
+return { get messages() { return messages; }, set mode(v) { mode = v; }, ... };
+```
+
+Components receive state via `$props()` and call store methods — no two-way binding to the store.
+
+## Component communication
+
+- `+page.svelte` instantiates the store and passes slices as props to `ChatPanel`, `Editor`, `Preview`
+- Preview exposes `getDiagramImageForAI()` and `waitForRender()` via `bind:this` + `export function`
+- Store gets these via callback assignments: `chat.getDiagramImage = () => previewComponent.getDiagramImageForAI()`
+
+## Preview tab persistence
+
+Both Mermaid and Enhanced tab contents are always in the DOM (toggled via `style:display`), NOT `{#if}`. This prevents the Mermaid SVG from being destroyed during the enhance flow.
+
+## Enhance routing
+
+The `mermaid_agent` returns `enhance_instructions` in the chat response when it determines visual enhancement is needed. The frontend handles this in `sendChatRequest()`:
+- If `enhance_instructions` is present: wait for render (if code also changed), then call `runEnhance()` with the instructions
+- If `enhance_instructions` is null: no enhance runs
+- "enhance" mode still works as a direct shortcut that bypasses code gen entirely
+
+## Adding a new chat mode
+
+1. Add the mode value to the `Mode` type union in `chat.svelte.ts`
+2. Add routing logic in `sendChatRequest()` (check `mode` before API call)
+3. Add the option to the `<select>` in `ChatPanel.svelte`
+
+## E2E testing notes
+
+- Tests must call `blockExternalRequests(page)` before `goto` (Google Fonts hang in WSL2)
+- Wait for `[data-hydrated]` attribute instead of SSR-rendered content
+- Use `svelteSelect(page, selector, value)` for `<select>` changes (Svelte 5 event delegation)
+- Use `.diagram-wrapper svg` to target the Mermaid diagram (not `.preview-panel svg` which matches icon SVGs)

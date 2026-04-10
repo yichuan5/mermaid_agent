@@ -80,7 +80,13 @@ export function createChatStore() {
   let waitForRender: (() => Promise<void>) | null = null;
 
   async function runEnhance(userMessage: string, instructions?: string | null) {
-    if (!getDiagramImage) return;
+    if (!getDiagramImage) {
+      messages.push({
+        role: "assistant",
+        content: "Unable to capture the diagram. Please ensure a diagram is rendered first.",
+      });
+      return;
+    }
     isEnhancing = true;
     activePreviewTab = "enhanced";
     try {
@@ -88,6 +94,10 @@ export function createChatStore() {
       if (!image) {
         isEnhancing = false;
         activePreviewTab = "mermaid";
+        messages.push({
+          role: "assistant",
+          content: "Could not capture the diagram image. Please ensure the diagram is rendered without errors.",
+        });
         return;
       }
       const result = await sendEnhance({
@@ -98,12 +108,12 @@ export function createChatStore() {
       if (result.enhanced_image) {
         enhancedImage = result.enhanced_image;
         if (result.explanation) {
-          messages.push({ role: "system", content: result.explanation });
+          messages.push({ role: "assistant", content: result.explanation });
         }
       } else {
         activePreviewTab = "mermaid";
         if (result.explanation) {
-          messages.push({ role: "system", content: result.explanation });
+          messages.push({ role: "assistant", content: result.explanation });
         }
       }
     } catch (e: any) {
@@ -126,10 +136,15 @@ export function createChatStore() {
     isLoading = true;
 
     if (mode === "enhance") {
-      isLoading = false;
-      await runEnhance(userMessage);
+      try {
+        await runEnhance(userMessage);
+      } finally {
+        isLoading = false;
+      }
       return;
     }
+
+    let enhanceInstructions: string | null = null;
 
     try {
       const history = buildHistory(messages, { skip: "both" });
@@ -166,6 +181,8 @@ export function createChatStore() {
       if (mode === "generate") {
         activePreviewTab = "mermaid";
       }
+
+      enhanceInstructions = data.enhance_instructions;
     } catch (e: any) {
       messages.push({
         role: "assistant",
@@ -175,12 +192,11 @@ export function createChatStore() {
       isLoading = false;
     }
 
-    // Auto mode: after code gen + render, evaluate with enhance agent
-    if (mode === "auto") {
+    if (enhanceInstructions) {
       if (waitForRender) {
         await waitForRender();
       }
-      await runEnhance(userMessage);
+      await runEnhance(userMessage, enhanceInstructions);
     }
   }
 
@@ -247,15 +263,23 @@ export function createChatStore() {
     }
   }
 
+  function updateOrPushSystemFix(content: string) {
+    const last = messages[messages.length - 1];
+    if (last && last.role === "system" && last._fixNotice) {
+      last.content = content;
+    } else {
+      messages.push({ role: "system", content, _fixNotice: true });
+    }
+  }
+
   async function handleRenderError(code: string, error: string) {
     if (codeSource !== "ai" || autoFixPending || isLoading) return;
 
     if (autoFixCount >= MAX_AUTO_FIX) {
       if (autoFixCount === MAX_AUTO_FIX) {
-        messages.push({
-          role: "system",
-          content: `Auto-fix limit reached (${MAX_AUTO_FIX} attempts). Please fix the code manually.`,
-        });
+        updateOrPushSystemFix(
+          `Auto-fix failed after ${MAX_AUTO_FIX} attempts. Please fix the code manually.\n\`${error.split("\n")[0]}\``,
+        );
         autoFixCount++;
       }
       return;
@@ -264,10 +288,9 @@ export function createChatStore() {
     autoFixPending = true;
     autoFixCount++;
 
-    messages.push({
-      role: "system",
-      content: `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
-    });
+    updateOrPushSystemFix(
+      `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
+    );
 
     try {
       isLoading = true;
@@ -289,10 +312,9 @@ export function createChatStore() {
     fixAttempts = [];
     autoFixPending = true;
 
-    messages.push({
-      role: "system",
-      content: `Asking AI to fix the code...\n\`${error.split("\n")[0]}\``,
-    });
+    updateOrPushSystemFix(
+      `Asking AI to fix the code...\n\`${error.split("\n")[0]}\``,
+    );
     try {
       isLoading = true;
       await performFix(code, error);
@@ -309,7 +331,12 @@ export function createChatStore() {
 
   async function handleManualEnhance(instructions?: string) {
     if (isLoading || isEnhancing) return;
-    await runEnhance("", instructions);
+    isLoading = true;
+    try {
+      await runEnhance("", instructions);
+    } finally {
+      isLoading = false;
+    }
   }
 
   return {

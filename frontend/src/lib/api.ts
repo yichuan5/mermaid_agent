@@ -2,6 +2,7 @@ export interface ChatResponse {
     mermaid_code: string | null;
     explanation: string;
     follow_up_commands: string[];
+    enhance_instructions: string | null;
 }
 
 export interface ChatPayload {

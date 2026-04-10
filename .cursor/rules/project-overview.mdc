@@ -1,0 +1,67 @@
+---
+description: Mermaid Agent project architecture and navigation guide
+alwaysApply: true
+---
+
+# Mermaid Agent — Project Overview
+
+AI-powered Mermaid diagram generator with live editing, auto-fix, and image enhancement.
+
+## Architecture
+
+- **Backend** (`backend/`): FastAPI + Pydantic AI agents powered by Google Gemini
+- **Frontend** (`frontend/`): SvelteKit (Svelte 5 runes, Vite) with CodeMirror editor + Mermaid.js preview
+- **Proxy**: Frontend `routes/api/[...path]/+server.ts` proxies `/api/*` to backend (env `BACKEND_URL`)
+- **Docker**: `docker-compose.yml` runs both services; frontend on :3000, backend on :8000
+
+## Key Data Flow
+
+```
+User chat → POST /api/chat → mermaid_agent (Gemini) → mermaid_code + explanation
+                                                     → enhance_instructions (optional, routes to enhance)
+            POST /api/fix  → fix_agent                → corrected code
+            POST /api/chat/image → convert_agent       → code from image
+            POST /api/enhance → enhance_image (Gemini image gen) → enhanced PNG or null
+```
+
+## Backend Key Files
+
+| File | What it does |
+|------|-------------|
+| `app/main.py` | FastAPI routes: `/api/chat`, `/api/fix`, `/api/chat/image`, `/api/enhance`, `/health` |
+| `app/schema.py` | Request/response Pydantic models (`ChatRequest`, `EnhanceRequest`, etc.) |
+| `app/services/agent.py` | AI agents: `mermaid_agent`, `fix_agent`, `convert_agent`, `enhance_image()`. Uses `GoogleProvider` from pydantic-ai; `enhance_image` reuses the provider's underlying `google-genai` client for image generation |
+| `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT`, `FIX_PROMPT`, `IMAGE_TO_MERMAID_PROMPT`, `ENHANCE_PROMPT` |
+| `app/services/doc_fetcher.py` | Fetches Mermaid syntax docs from GitHub into `app/docs/` at startup |
+| `app/docs/` | Cached Mermaid syntax `.md` files + `config.schema.json` (gitignored, fetched at runtime) |
+
+## Frontend Key Files
+
+| File | What it does |
+|------|-------------|
+| `src/lib/chat.svelte.ts` | Central store (`createChatStore`): all state via `$state` runes — messages, diagramCode, mode, chartType, enhancedImage, auto-fix loop, enhance flow |
+| `src/lib/ChatPanel.svelte` | Chat UI: message list, Mode dropdown (auto/generate/enhance), Chart Type dropdown, text input, image upload |
+| `src/lib/Editor.svelte` | CodeMirror 6 editor with `codemirror-lang-mermaid` |
+| `src/lib/Preview.svelte` | Tabbed preview (Mermaid / Enhanced), Mermaid.js rendering, SVG→JPEG capture, zoom/pan, Enhance button with popover |
+| `src/lib/api.ts` | API client: `sendChat`, `sendFix`, `sendImage`, `sendEnhance` |
+| `src/lib/types.ts` | `Message` interface |
+| `src/routes/+page.svelte` | Main page: 3-panel resizable layout, wires store to components, `data-hydrated` attribute for e2e tests |
+
+## Important Patterns
+
+- **Svelte 5 runes**: All state uses `$state()`, `$effect()`, `$props()` — no legacy `$:` or stores
+- **Auto-fix loop**: `handleRenderError` in chat store retries up to 3 times via `/api/fix`
+- **Agent-driven enhance routing**: `mermaid_agent` decides whether a request needs code changes, visual enhancement, or both. It returns `enhance_instructions` in `ChatResponse` to route to the enhance agent. The frontend triggers enhance only when `enhance_instructions` is present (not automatically on every request).
+- **Tab content persistence**: Preview uses `style:display` (not `{#if}`) so both Mermaid SVG and Enhanced panels stay in DOM
+- **Agent tools**: `read_mermaid_syntax(diagram_type)` and `read_mermaid_config(path)` give Gemini access to Mermaid docs
+
+## Tests
+
+- **Backend**: `pytest` — `backend/tests/test_api.py` (HTTP endpoints), `test_agent.py` (tool functions). Run: `cd backend && uv run pytest`
+- **Frontend**: Playwright e2e — `frontend/test/e2e.spec.ts`. Run: `cd frontend && npx playwright test`
+- **WSL2 note**: E2E tests block Google Fonts (`blockExternalRequests`) and wait for `[data-hydrated]` to handle SSR hydration timing. Use `svelteSelect()` helper for Svelte 5 select interactions.
+
+## Environment
+
+- `backend/.env`: `GEMINI_API_KEY`, `GEMINI_MODEL` (default gemini-2.5-flash), `ENHANCE_MODEL` (default gemini-2.5-flash-preview-04-17)
+- No `python` binary in WSL2 — use `uv run python` or `python3`

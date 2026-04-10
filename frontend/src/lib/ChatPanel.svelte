@@ -2,6 +2,7 @@
   import { tick } from "svelte";
   import type { Message } from "$lib/types";
   import type { Mode } from "$lib/chat.svelte";
+  import { renderMarkdown } from "$lib/markdown";
 
   let {
     messages,
@@ -153,7 +154,11 @@
               class="message-image"
             />
           {/if}
-          {msg.content}
+          {#if msg.role === "system"}
+            {msg.content}
+          {:else}
+            {@html renderMarkdown(msg.content)}
+          {/if}
         </div>
         {#if msg.followUpSuggestions && msg.followUpSuggestions.length > 0}
           <div class="suggestion-chips">
