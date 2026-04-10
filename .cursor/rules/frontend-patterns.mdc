@@ -12,39 +12,65 @@ All state lives in `lib/chat.svelte.ts` via `createChatStore()`. Uses Svelte 5 r
 
 ```typescript
 let messages: Message[] = $state([...]);
-let mode: Mode = $state("auto");
+let chartType: string | null = $state(null);
 // Exposed as properties on the returned object
-return { get messages() { return messages; }, set mode(v) { mode = v; }, ... };
+return { get messages() { return messages; }, set chartType(v) { chartType = v; }, ... };
 ```
 
 Components receive state via `$props()` and call store methods — no two-way binding to the store.
 
+## WebSocket communication
+
+All chat/image/fix interactions go through `lib/ws.ts` using WebSocket (`/api/chat/ws`). There is no REST API client — the old `api.ts` and the SvelteKit `routes/api/[...path]/+server.ts` proxy have been removed.
+
+- `sendWsMessage(payload, callbacks)` opens a WS connection per conversation turn
+- `WsCallbacks` interface defines handlers for `onStatus`, `onMermaidCode`, `onEnhancedImage`, `onMessage`, `onError`, `onDone`, plus client-side tool executors `renderAndCapture` and `captureScreenshot`
+- In dev, Vite proxy (`vite.config.ts`) forwards `/api/chat/ws` to backend
+- In Docker, nginx routes `/api/chat/ws` with WebSocket upgrade headers
+
 ## Component communication
 
 - `+page.svelte` instantiates the store and passes slices as props to `ChatPanel`, `Editor`, `Preview`
-- Preview exposes `getDiagramImageForAI()` and `waitForRender()` via `bind:this` + `export function`
+- Preview exposes `getDiagramImageForAI()` and `renderAndGetResult()` via `bind:this` + `export function`
 - Store gets these via callback assignments: `chat.getDiagramImage = () => previewComponent.getDiagramImageForAI()`
+- Editor fires `onFocus` prop when the CodeMirror editor gains focus, used to switch preview to Mermaid tab
 
-## Preview tab persistence
+## Preview panel
 
-Both Mermaid and Enhanced tab contents are always in the DOM (toggled via `style:display`), NOT `{#if}`. This prevents the Mermaid SVG from being destroyed during the enhance flow.
+- **Full-width tab bar** at the top with "Mermaid" and "AI Enhanced" tabs (`.preview-tab-bar`)
+- Toolbar below tabs with theme toggle, download, zoom controls (Mermaid tab) or download + zoom (Enhanced tab)
+- Both tab contents are always in the DOM (toggled via `style:display`), NOT `{#if}` — prevents SVG destruction
+- No Enhance button — enhancement is triggered by the agent when user requests it via chat
 
-## Enhance routing
+## Enhancement flow
 
-The `mermaid_agent` returns `enhance_instructions` in the chat response when it determines visual enhancement is needed. The frontend handles this in `sendChatRequest()`:
-- If `enhance_instructions` is present: wait for render (if code also changed), then call `runEnhance()` with the instructions
-- If `enhance_instructions` is null: no enhance runs
-- "enhance" mode still works as a direct shortcut that bypasses code gen entirely
+Enhancement is fully agent-driven. When the user asks for enhancement via chat:
+1. The unified agent calls `render_and_capture` to get the current diagram
+2. The agent calls `enhance_diagram` with instructions
+3. Backend streams `enhanced_image` event via WebSocket
+4. Frontend receives it in `onEnhancedImage` callback and switches to the AI Enhanced tab
 
-## Adding a new chat mode
+There is no manual Enhance button or mode dropdown.
 
-1. Add the mode value to the `Mode` type union in `chat.svelte.ts`
-2. Add routing logic in `sendChatRequest()` (check `mode` before API call)
-3. Add the option to the `<select>` in `ChatPanel.svelte`
+## E2E testing
 
-## E2E testing notes
+Tests use Playwright's `page.routeWebSocket()` to mock the WebSocket endpoint:
 
-- Tests must call `blockExternalRequests(page)` before `goto` (Google Fonts hang in WSL2)
+```typescript
+await page.routeWebSocket('**/api/chat/ws', (ws) => {
+    ws.onMessage(async (data) => {
+        const msg = JSON.parse(data.toString());
+        if (msg.type === 'user_message') {
+            ws.send(JSON.stringify({ type: 'message', content: '...', mermaid_code: '...', follow_up_commands: [] }));
+            ws.send(JSON.stringify({ type: 'done' }));
+        }
+    });
+});
+```
+
+Key patterns:
+- Call `blockExternalRequests(page)` before `goto` (Google Fonts hang in WSL2)
 - Wait for `[data-hydrated]` attribute instead of SSR-rendered content
-- Use `svelteSelect(page, selector, value)` for `<select>` changes (Svelte 5 event delegation)
 - Use `.diagram-wrapper svg` to target the Mermaid diagram (not `.preview-panel svg` which matches icon SVGs)
+- `mockSimpleWsReply` helper for basic request/response patterns
+- `mockWebSocket` helper for custom WS interactions (capturing payloads, multi-step flows)

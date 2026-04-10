@@ -11,27 +11,46 @@ AI-powered Mermaid diagram generator with live editing, auto-fix, and image enha
 
 - **Backend** (`backend/`): FastAPI + Pydantic AI agents powered by Google Gemini
 - **Frontend** (`frontend/`): SvelteKit (Svelte 5 runes, Vite) with CodeMirror editor + Mermaid.js preview
-- **Proxy**: Frontend `routes/api/[...path]/+server.ts` proxies `/api/*` to backend (env `BACKEND_URL`)
-- **Docker**: `docker-compose.yml` runs both services; frontend on :3000, backend on :8000
+- **Primary protocol**: WebSocket (`/api/chat/ws`) — server-side unified agent with client-side tools
+- **Legacy REST**: `/api/chat`, `/api/fix`, `/api/chat/image`, `/api/enhance` endpoints still exist for backward compat
+- **Proxy**: Frontend `routes/api/[...path]/+server.ts` has been removed. Nginx handles routing in Docker; Vite proxy handles dev.
+- **Docker**: `docker-compose.yml` runs three services: `nginx` (exposed on :3000), `frontend` (internal), `backend` (internal)
 
 ## Key Data Flow
 
 ```
-User chat → POST /api/chat → mermaid_agent (Gemini) → mermaid_code + explanation
-                                                     → enhance_instructions (optional, routes to enhance)
-            POST /api/fix  → fix_agent                → corrected code
-            POST /api/chat/image → convert_agent       → code from image
-            POST /api/enhance → enhance_image (Gemini image gen) → enhanced PNG or null
+WebSocket flow (primary):
+User chat → WS /api/chat/ws → unified_agent (Gemini)
+  ← tool_request: render_and_capture(code) → frontend renders + captures screenshot
+  → tool_result: {image: base64} or {error: msg}
+  (agent fixes code and retries if error)
+  ← tool_request: capture_screenshot → frontend captures current diagram
+  → calls enhance_diagram tool (Gemini image gen)
+  ← enhanced_image, message, done
+
+Legacy REST (backward compat):
+POST /api/chat → mermaid_agent → mermaid_code + explanation
+POST /api/fix  → fix_agent     → corrected code
+POST /api/chat/image → convert_agent → code from image
+POST /api/enhance → enhance_image   → enhanced PNG or null
 ```
+
+## Deployment
+
+- **nginx** reverse proxy is the sole exposed service (port 3000 → nginx port 80)
+- `location /api/chat/ws` → backend (WebSocket upgrade headers)
+- `location /api/` → backend (REST)
+- `location /` → frontend (SvelteKit)
+- Backend and frontend are internal-only (no ports exposed to host)
 
 ## Backend Key Files
 
 | File | What it does |
 |------|-------------|
-| `app/main.py` | FastAPI routes: `/api/chat`, `/api/fix`, `/api/chat/image`, `/api/enhance`, `/health` |
-| `app/schema.py` | Request/response Pydantic models (`ChatRequest`, `EnhanceRequest`, etc.) |
-| `app/services/agent.py` | AI agents: `mermaid_agent`, `fix_agent`, `convert_agent`, `enhance_image()`. Uses `GoogleProvider` from pydantic-ai; `enhance_image` reuses the provider's underlying `google-genai` client for image generation |
-| `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT`, `FIX_PROMPT`, `IMAGE_TO_MERMAID_PROMPT`, `ENHANCE_PROMPT` |
+| `app/main.py` | WebSocket endpoint `/api/chat/ws` + legacy REST routes |
+| `app/schema.py` | Request/response Pydantic models (`ChatRequest`, `ChatResponse`, etc.) |
+| `app/services/agent.py` | `AgentDeps` (WS tool bridge), `unified_agent` with 4 tools, legacy agents for REST |
+| `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT` (unified), `LEGACY_SYSTEM_PROMPT`, `FIX_PROMPT`, etc. |
 | `app/services/doc_fetcher.py` | Fetches Mermaid syntax docs from GitHub into `app/docs/` at startup |
 | `app/docs/` | Cached Mermaid syntax `.md` files + `config.schema.json` (gitignored, fetched at runtime) |
 
@@ -39,27 +58,29 @@ User chat → POST /api/chat → mermaid_agent (Gemini) → mermaid_code + expla
 
 | File | What it does |
 |------|-------------|
-| `src/lib/chat.svelte.ts` | Central store (`createChatStore`): all state via `$state` runes — messages, diagramCode, mode, chartType, enhancedImage, auto-fix loop, enhance flow |
-| `src/lib/ChatPanel.svelte` | Chat UI: message list, Mode dropdown (auto/generate/enhance), Chart Type dropdown, text input, image upload |
-| `src/lib/Editor.svelte` | CodeMirror 6 editor with `codemirror-lang-mermaid` |
-| `src/lib/Preview.svelte` | Tabbed preview (Mermaid / Enhanced), Mermaid.js rendering, SVG→JPEG capture, zoom/pan, Enhance button with popover |
-| `src/lib/api.ts` | API client: `sendChat`, `sendFix`, `sendImage`, `sendEnhance` |
+| `src/lib/ws.ts` | WebSocket client: sends messages, dispatches events, executes client-side tools |
+| `src/lib/chat.svelte.ts` | Central store (`createChatStore`): all state via `$state` runes — messages, diagramCode, chartType, enhancedImage |
+| `src/lib/ChatPanel.svelte` | Chat UI: message list, Chart Type dropdown, text input, image upload |
+| `src/lib/Editor.svelte` | CodeMirror 6 editor with `codemirror-lang-mermaid`, fires `onFocus` callback |
+| `src/lib/Preview.svelte` | Full-width tab bar (Mermaid / AI Enhanced), rendering, SVG→JPEG capture, zoom/pan |
 | `src/lib/types.ts` | `Message` interface |
-| `src/routes/+page.svelte` | Main page: 3-panel resizable layout, wires store to components, `data-hydrated` attribute for e2e tests |
+| `src/routes/+page.svelte` | Main page: 3-panel resizable layout, wires store to components |
 
 ## Important Patterns
 
 - **Svelte 5 runes**: All state uses `$state()`, `$effect()`, `$props()` — no legacy `$:` or stores
-- **Auto-fix loop**: `handleRenderError` in chat store retries up to 3 times via `/api/fix`
-- **Agent-driven enhance routing**: `mermaid_agent` decides whether a request needs code changes, visual enhancement, or both. It returns `enhance_instructions` in `ChatResponse` to route to the enhance agent. The frontend triggers enhance only when `enhance_instructions` is present (not automatically on every request).
+- **Unified agent loop**: Server runs one `pydantic-ai` agent with 4 tools. Client-side tools (`render_and_capture`, `capture_screenshot`) execute via WS tool_request/tool_result protocol. Auto-fix is handled by the agent (it sees render errors and retries).
+- **AgentDeps**: Dataclass injected via `RunContext[AgentDeps]`. Contains the WebSocket + pending tool futures. `request_client_tool()` sends a WS message and awaits the response via `asyncio.Future`.
 - **Tab content persistence**: Preview uses `style:display` (not `{#if}`) so both Mermaid SVG and Enhanced panels stay in DOM
-- **Agent tools**: `read_mermaid_syntax(diagram_type)` and `read_mermaid_config(path)` give Gemini access to Mermaid docs
+- **Editor focus → Mermaid tab**: Clicking/focusing the code editor automatically switches the preview to the Mermaid tab
+- **Agent tools**: `read_mermaid_syntax`, `read_mermaid_config` (server-side docs), `render_and_capture` (client-side), `enhance_diagram` (server-side image gen)
+- **No Enhance button**: Enhancement is triggered by the agent when appropriate (user asks via chat). No manual Enhance button in the UI.
 
 ## Tests
 
-- **Backend**: `pytest` — `backend/tests/test_api.py` (HTTP endpoints), `test_agent.py` (tool functions). Run: `cd backend && uv run pytest`
+- **Backend**: `pytest` — `backend/tests/test_api.py` (REST + WebSocket endpoints), `test_agent.py` (tool functions). Run: `cd backend && uv run pytest`
 - **Frontend**: Playwright e2e — `frontend/test/e2e.spec.ts`. Run: `cd frontend && npx playwright test`
-- **WSL2 note**: E2E tests block Google Fonts (`blockExternalRequests`) and wait for `[data-hydrated]` to handle SSR hydration timing. Use `svelteSelect()` helper for Svelte 5 select interactions.
+- **WSL2 note**: E2E tests block Google Fonts (`blockExternalRequests`) and wait for `[data-hydrated]` to handle SSR hydration timing.
 
 ## Environment
 

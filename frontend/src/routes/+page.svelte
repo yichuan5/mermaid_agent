@@ -9,14 +9,14 @@
   let hydrated = $state(false);
   onMount(() => { hydrated = true; });
 
-  // ── Diagram image capture & render waiting ─────────────────────
+  // ── Diagram image capture & render for WS agent tools ──────────
   let previewComponent: ReturnType<typeof Preview>;
   $effect(() => {
     chat.getDiagramImage = previewComponent
       ? () => previewComponent.getDiagramImageForAI()
       : null;
-    chat.waitForRender = previewComponent
-      ? () => previewComponent.waitForRender()
+    chat.renderMermaidCode = previewComponent
+      ? (code: string) => previewComponent.renderAndGetResult(code)
       : null;
   });
 
@@ -86,11 +86,11 @@
     <ChatPanel
       messages={chat.messages}
       isLoading={chat.isLoading}
+      statusMessage={chat.statusMessage}
       onSubmit={chat.handleUserSubmit}
+      onStop={chat.stopAgent}
       onImageUpload={chat.handleImageUpload}
-      mode={chat.mode}
       chartType={chat.chartType}
-      onModeChange={(m) => (chat.mode = m)}
       onChartTypeChange={(ct) => (chat.chartType = ct)}
     />
 
@@ -102,7 +102,7 @@
       aria-label="Resize chat and editor panels"
     ></div>
 
-    <Editor code={chat.diagramCode} onCodeChange={chat.handleCodeChange} />
+    <Editor code={chat.diagramCode} onCodeChange={chat.handleCodeChange} onFocus={() => (chat.activePreviewTab = "mermaid")} />
 
     <div
       class="divider"
@@ -115,14 +115,11 @@
     <Preview
       bind:this={previewComponent}
       code={chat.diagramCode}
-      onRenderError={chat.handleRenderError}
       onFixRequest={chat.handleFixRequest}
       isLoading={chat.isLoading}
       activeTab={chat.activePreviewTab}
       enhancedImage={chat.enhancedImage}
-      isEnhancing={chat.isEnhancing}
       onTabChange={(tab) => (chat.activePreviewTab = tab)}
-      onEnhanceRequest={(instructions) => chat.handleManualEnhance(instructions)}
     />
   </main>
 </div>

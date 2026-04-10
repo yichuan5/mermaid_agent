@@ -1,26 +1,25 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { Message } from "$lib/types";
-  import type { Mode } from "$lib/chat.svelte";
   import { renderMarkdown } from "$lib/markdown";
 
   let {
     messages,
     isLoading,
+    statusMessage = null,
     onSubmit,
+    onStop,
     onImageUpload,
-    mode,
     chartType,
-    onModeChange,
     onChartTypeChange,
   }: {
     messages: Message[];
     isLoading: boolean;
+    statusMessage?: string | null;
     onSubmit: (text: string) => void;
+    onStop: () => void;
     onImageUpload: (file: File, message: string) => void;
-    mode: Mode;
     chartType: string | null;
-    onModeChange: (mode: Mode) => void;
     onChartTypeChange: (chartType: string | null) => void;
   } = $props();
 
@@ -139,7 +138,7 @@
     <span class="panel-icon"></span>
     <h2>AI Assistant</h2>
     {#if isLoading}
-      <span class="thinking-badge">thinking…</span>
+      <span class="thinking-badge">{statusMessage || "thinking…"}</span>
     {/if}
   </div>
 
@@ -202,36 +201,21 @@
   >
     <div class="chat-toolbar">
       <div class="toolbar-select">
-        <label for="mode-select">Mode</label>
+        <label for="chart-select">Chart</label>
         <select
-          id="mode-select"
-          value={mode}
-          onchange={(e) => onModeChange(e.currentTarget.value as Mode)}
+          id="chart-select"
+          value={chartType ?? ""}
+          onchange={(e) => {
+            const v = e.currentTarget.value;
+            onChartTypeChange(v === "" ? null : v);
+          }}
           disabled={isLoading}
         >
-          <option value="auto">Auto</option>
-          <option value="generate">Generate Code</option>
-          <option value="enhance">Enhance Graph</option>
+          {#each CHART_TYPES as ct}
+            <option value={ct.value ?? ""}>{ct.label}</option>
+          {/each}
         </select>
       </div>
-      {#if mode !== "enhance"}
-        <div class="toolbar-select">
-          <label for="chart-select">Chart</label>
-          <select
-            id="chart-select"
-            value={chartType ?? ""}
-            onchange={(e) => {
-              const v = e.currentTarget.value;
-              onChartTypeChange(v === "" ? null : v);
-            }}
-            disabled={isLoading}
-          >
-            {#each CHART_TYPES as ct}
-              <option value={ct.value ?? ""}>{ct.label}</option>
-            {/each}
-          </select>
-        </div>
-      {/if}
     </div>
 
     {#if imagePreviewUrl}
@@ -304,27 +288,28 @@
           <polyline points="21 15 16 10 5 21" />
         </svg>
       </button>
-      <button
-        type="submit"
-        id="chat-send-btn"
-        disabled={isLoading || (!inputText.trim() && !pendingImage)}
-      >
-        {#if isLoading}
-          <svg
-            class="spin"
-            width="14"
-            height="14"
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2.5"><path d="M12 2a10 10 0 0 1 10 10" /></svg
-          >
-        {:else}
+      {#if isLoading}
+        <button
+          type="button"
+          class="stop-btn"
+          onclick={onStop}
+          title="Stop generation"
+        >
+          <svg width="12" height="12" viewBox="0 0 12 12" fill="currentColor">
+            <rect x="1" y="1" width="10" height="10" rx="2" />
+          </svg>
+        </button>
+      {:else}
+        <button
+          type="submit"
+          id="chat-send-btn"
+          disabled={!inputText.trim() && !pendingImage}
+        >
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor"
             ><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z" /></svg
           >
-        {/if}
-      </button>
+        </button>
+      {/if}
     </div>
   </form>
 </section>

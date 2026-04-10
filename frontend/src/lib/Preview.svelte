@@ -5,29 +5,19 @@
 
   let {
     code,
-    onRenderError,
     onFixRequest,
     isLoading = false,
     activeTab = "mermaid",
     enhancedImage = null,
-    isEnhancing = false,
     onTabChange,
-    onEnhanceRequest,
   }: {
     code: string;
-    onRenderError?: (code: string, error: string) => void;
     onFixRequest?: (code: string, error: string) => void;
     isLoading?: boolean;
     activeTab?: PreviewTab;
     enhancedImage?: string | null;
-    isEnhancing?: boolean;
     onTabChange?: (tab: PreviewTab) => void;
-    onEnhanceRequest?: (instructions?: string) => void;
   } = $props();
-
-  let showEnhancePopover = $state(false);
-  let enhanceInstructions = $state("");
-  let enhancePopoverEl: HTMLDivElement;
 
   /**
    * Shared helper: renders the current diagram SVG to a JPEG base64 string.
@@ -149,20 +139,28 @@
     enhancedContainerEl.addEventListener("pointerup", onUp);
   }
 
-  // Render-complete signalling for the auto-enhance flow
-  let renderResolve: (() => void) | null = null;
+  // No longer need renderResolve — agent uses renderAndGetResult directly
 
-  export function waitForRender(): Promise<void> {
-    return new Promise((resolve) => {
-      renderResolve = resolve;
-      // Fallback: resolve after debounce + render time + buffer
-      setTimeout(() => {
-        if (renderResolve === resolve) {
-          renderResolve = null;
-          resolve();
-        }
-      }, 1500);
-    });
+  /**
+   * Render mermaid code immediately (bypassing debounce) and return the result.
+   * Used by the WS agent's render_and_capture tool.
+   */
+  export async function renderAndGetResult(source: string): Promise<{ error?: string }> {
+    if (!wrapperEl || !source.trim()) return { error: "No render target available" };
+    clearTimeout(debounceTimer);
+    try {
+      renderError = "";
+      const id = `mermaid-${++renderCount}`;
+      const { svg } = await mermaid.render(id, source);
+      wrapperEl.innerHTML = svg;
+      const svgEl = wrapperEl.querySelector("svg");
+      if (svgEl) fixSvgClipping(svgEl);
+      return {};
+    } catch (e: any) {
+      const msg = e?.message ?? "Invalid Mermaid syntax";
+      renderError = msg;
+      return { error: msg };
+    }
   }
 
   // ── Download dropdown ─────────────────────────────────────────────
@@ -267,14 +265,8 @@
         wrapperEl.innerHTML = svg;
         const svgEl = wrapperEl.querySelector("svg");
         if (svgEl) fixSvgClipping(svgEl);
-        if (renderResolve) {
-          renderResolve();
-          renderResolve = null;
-        }
       } catch (e: any) {
-        const msg = e?.message ?? "Invalid Mermaid syntax";
-        renderError = msg;
-        setTimeout(() => onRenderError?.(source, msg), 300);
+        renderError = e?.message ?? "Invalid Mermaid syntax";
       }
     }, 400);
   }
@@ -365,13 +357,6 @@
     ) {
       showDownloadMenu = false;
     }
-    if (
-      showEnhancePopover &&
-      enhancePopoverEl &&
-      !enhancePopoverEl.contains(e.target as Node)
-    ) {
-      showEnhancePopover = false;
-    }
   }
 
   onMount(() => {
@@ -387,63 +372,20 @@
 </script>
 
 <section class="panel preview-panel" class:preview-light={!previewDark}>
+  <div class="preview-tab-bar">
+    <button
+      class="preview-tab"
+      class:active={activeTab === "mermaid"}
+      onclick={() => onTabChange?.("mermaid")}
+    >Mermaid</button>
+    <button
+      class="preview-tab"
+      class:active={activeTab === "enhanced"}
+      onclick={() => onTabChange?.("enhanced")}
+    >AI Enhanced</button>
+  </div>
+
   <div class="panel-header">
-    <div class="preview-tabs">
-      <button
-        class="preview-tab"
-        class:active={activeTab === "mermaid"}
-        onclick={() => onTabChange?.("mermaid")}
-      >Mermaid</button>
-      <button
-        class="preview-tab"
-        class:active={activeTab === "enhanced"}
-        onclick={() => onTabChange?.("enhanced")}
-      >Enhanced</button>
-    </div>
-
-    <!-- Enhance button with popover -->
-    <div class="enhance-wrapper" bind:this={enhancePopoverEl}>
-      <button
-        class="enhance-btn"
-        onclick={() => {
-          if (onEnhanceRequest) {
-            showEnhancePopover = !showEnhancePopover;
-          }
-        }}
-        disabled={isLoading || isEnhancing || !code.trim()}
-        title="Enhance diagram with AI"
-      >
-        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
-        </svg>
-        Enhance
-      </button>
-      {#if showEnhancePopover}
-        <div class="enhance-popover">
-          <input
-            type="text"
-            bind:value={enhanceInstructions}
-            placeholder="Optional: describe improvements..."
-            onkeydown={(e) => {
-              if (e.key === "Enter") {
-                onEnhanceRequest?.(enhanceInstructions || undefined);
-                showEnhancePopover = false;
-                enhanceInstructions = "";
-              }
-            }}
-          />
-          <button
-            class="enhance-popover-go"
-            onclick={() => {
-              onEnhanceRequest?.(enhanceInstructions || undefined);
-              showEnhancePopover = false;
-              enhanceInstructions = "";
-            }}
-          >Go</button>
-        </div>
-      {/if}
-    </div>
-
     {#if activeTab === "mermaid"}
       <button
         class="theme-toggle"
@@ -558,12 +500,7 @@
     aria-label="Enhanced diagram preview — scroll to zoom, drag to pan"
     style:display={activeTab === "enhanced" ? "flex" : "none"}
   >
-    {#if isEnhancing}
-      <div class="enhance-loading">
-        <div class="enhance-spinner"></div>
-        <p>Enhancing diagram...</p>
-      </div>
-    {:else if enhancedImage}
+    {#if enhancedImage}
       <div
         class="enhanced-wrapper"
         style="transform: translate({enhancedPanX}px, {enhancedPanY}px) scale({enhancedZoom}); transform-origin: 0 0;"
@@ -573,7 +510,7 @@
     {:else}
       <div class="enhance-placeholder">
         <p>No enhanced image yet.</p>
-        <p class="enhance-placeholder-hint">Click <strong>Enhance</strong> or use <strong>Auto</strong> mode to generate one.</p>
+        <p class="enhance-placeholder-hint">The AI agent will enhance diagrams when it detects layout issues.</p>
       </div>
     {/if}
   </div>

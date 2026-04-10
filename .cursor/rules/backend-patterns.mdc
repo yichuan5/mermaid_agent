@@ -15,21 +15,47 @@ alwaysApply: false
 
 ## Agent architecture
 
-- Text agents (`mermaid_agent`, `fix_agent`, `convert_agent`) use **pydantic-ai** `Agent` with `GoogleModel`
-- Image generation (`enhance_image`) reuses `GoogleProvider.client` (the underlying `google-genai` client) directly — pydantic-ai doesn't support image output
+- **Unified agent** (`unified_agent`) is the primary agent used over WebSocket. It has 4 tools:
+  - `read_mermaid_syntax` / `read_mermaid_config` — server-side, fetch Mermaid docs
+  - `render_and_capture` — client-side (via WS tool_request), renders code in browser and captures screenshot
+  - `enhance_diagram` — server-side, calls Gemini image gen after capturing a screenshot via client tool
+- **AgentDeps** is injected via `RunContext[AgentDeps]`. It holds the `WebSocket` and manages pending tool futures with `request_client_tool()` / `resolve_tool()`.
+- **Legacy agents** (`mermaid_agent`, `fix_agent`, `convert_agent`) are kept for REST backward compat
+- Image generation (`_enhance_image_impl`) reuses `GoogleProvider.client` directly — pydantic-ai doesn't support image output
 - All agents share one `GoogleProvider` instance initialized at module level
-- Agent tools are registered with `@agent.tool` decorator and can access Mermaid docs from `app/docs/`
-- **Enhance routing**: `mermaid_agent` acts as a router — its `ChatResponse` includes an optional `enhance_instructions` field. For visual/layout requests, it sets `enhance_instructions` (and optionally `mermaid_code=None` to skip code changes). The frontend uses this to trigger the enhance agent with specific instructions. The `/api/enhance` endpoint remains independently callable for manual enhancement.
+- Tool logic is extracted into `_impl` helper functions shared by both unified and legacy agents
+
+## WebSocket protocol
+
+Server → Client: `status`, `tool_request`, `enhanced_image`, `message`, `error`, `done`
+Client → Server: `user_message`, `image_upload`, `tool_result`
+
+The `_listen_for_tool_results` task runs concurrently with the agent loop, resolving `asyncio.Future`s as client tool responses arrive.
+
+## Deployment
+
+- **nginx** is the sole exposed entry point in Docker (port 3000)
+- `/api/chat/ws` → backend (WebSocket with upgrade headers)
+- `/api/*` → backend (REST)
+- `/` → frontend (SvelteKit)
+- Backend port 8000 is internal-only, never exposed to host
 
 ## Testing
 
 ```python
-# Mock pattern for agent service functions:
+# Mock pattern for REST endpoints:
 @patch("app.main.generate_mermaid", new_callable=AsyncMock)
-async def test_chat(self, mock_gen):
+def test_chat(self, mock_gen, client):
     mock_gen.return_value = {"mermaid_code": "...", "explanation": "..."}
-    resp = self.client.post("/api/chat", json={...})
+    resp = client.post("/api/chat", json={...})
+
+# Mock pattern for WebSocket:
+@patch("app.main.run_unified_agent", new_callable=AsyncMock)
+def test_ws(self, mock_agent, client):
+    mock_agent.return_value = {"mermaid_code": "...", "explanation": "..."}
+    with client.websocket_connect("/api/chat/ws") as ws:
+        ws.send_json({"type": "user_message", ...})
 ```
 
 - Run: `cd backend && uv run pytest -v`
-- Tests use `httpx.ASGITransport` with the FastAPI app directly (no server needed)
+- Tests use `TestClient` with the FastAPI app directly (no server needed)

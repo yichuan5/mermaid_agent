@@ -2,7 +2,10 @@ import os
 import json
 import logging
 import base64
+import asyncio
+from dataclasses import dataclass, field
 from pathlib import Path
+from uuid import uuid4
 from dotenv import load_dotenv
 from typing import Literal
 
@@ -18,8 +21,9 @@ from pydantic_ai.messages import (
     BinaryContent,
 )
 from google.genai import types as genai_types
-from app.schema import ChatResponse, FixResponse, HistoryMessage, FixAttempt
-from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT, FIX_PROMPT, ENHANCE_PROMPT
+from fastapi import WebSocket
+from app.schema import ChatResponse
+from .prompts import SYSTEM_PROMPT, ENHANCE_PROMPT
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -27,7 +31,6 @@ logging.basicConfig(
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
 )
 
-# Always load .env from the backend/ directory, regardless of cwd
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
@@ -70,12 +73,8 @@ DiagramType = Literal[
     "zenuml",
 ]
 
-mermaid_agent = Agent(
-    model=llm,
-    output_type=ChatResponse,
-    system_prompt=SYSTEM_PROMPT,
-    retries=2,
-)
+
+# ── Shared helper functions ──────────────────────────────────────
 
 
 def _clean_markdown(content: str) -> str:
@@ -87,23 +86,11 @@ def _clean_markdown(content: str) -> str:
     return content
 
 
-@mermaid_agent.tool
-def read_mermaid_syntax(ctx: RunContext[None], diagram_type: DiagramType) -> str:
-    """Fetch the complete Markdown documentation for a specific Mermaid diagram type."""
-    logger.info("Agent requested documentation: %s", diagram_type)
-
-    path = DOCS_DIR / f"{diagram_type}.md"
-    if path.exists():
-        return _clean_markdown(path.read_text(encoding="utf-8"))
-
-    return f"Documentation for '{diagram_type}' not found. Please select a valid diagram type."
-
-
 def _resolve_schema_refs(
     schema: dict, obj: dict | list | str | int | float | bool | None, depth: int = 0
 ) -> any:
     """Recursively resolve $ref pointers in a JSON schema."""
-    if depth > 5:  # Prevent infinite recursion just in case
+    if depth > 5:
         return obj
 
     if isinstance(obj, dict):
@@ -112,11 +99,10 @@ def _resolve_schema_refs(
             if ref_path.startswith("#/$defs/"):
                 def_name = ref_path.split("/")[-1]
                 resolved_def = schema.get("$defs", {}).get(def_name, {})
-                # Merge the resolved properties with any other properties on this level
                 merged = {k: v for k, v in obj.items() if k != "$ref"}
                 merged.update(resolved_def)
                 return _resolve_schema_refs(schema, merged, depth + 1)
-            return obj  # Unsupported ref format
+            return obj
 
         return {k: _resolve_schema_refs(schema, v, depth + 1) for k, v in obj.items()}
     elif isinstance(obj, list):
@@ -125,13 +111,18 @@ def _resolve_schema_refs(
         return obj
 
 
-@mermaid_agent.tool
-def read_mermaid_config(ctx: RunContext[None], property_name: str | None = None) -> str:
-    """Fetch the Mermaid configuration schema. If property_name is None, returns a summary of all top-level properties. If property_name is provided, returns the detailed, fully-resolved schema for that specific property."""
-    logger.info(
-        "Agent requested Mermaid config schema (property_name=%r)", property_name
-    )
+def _read_mermaid_syntax_impl(diagram_type: DiagramType) -> str:
+    """Core logic for reading Mermaid syntax docs."""
+    logger.info("Agent requested documentation: %s", diagram_type)
+    path = DOCS_DIR / f"{diagram_type}.md"
+    if path.exists():
+        return _clean_markdown(path.read_text(encoding="utf-8"))
+    return f"Documentation for '{diagram_type}' not found. Please select a valid diagram type."
 
+
+def _read_mermaid_config_impl(property_name: str | None = None) -> str:
+    """Core logic for reading Mermaid config schema."""
+    logger.info("Agent requested Mermaid config schema (property_name=%r)", property_name)
     path = DOCS_DIR.parent / "config.schema.json"
     if not path.exists():
         return "Configuration schema not found locally."
@@ -144,7 +135,6 @@ def read_mermaid_config(ctx: RunContext[None], property_name: str | None = None)
     properties = schema.get("properties", {})
 
     if not property_name:
-        # Provide a summarized list of all root properties
         summary = ["Top-level Mermaid configuration properties:"]
         for prop, details in properties.items():
             desc = details.get("description", "").split("\n")[0]
@@ -153,202 +143,24 @@ def read_mermaid_config(ctx: RunContext[None], property_name: str | None = None)
             else:
                 summary.append(f"- {prop}")
         summary.append(
-            "\nCall this tool again with `property_name='<prop_name>'` to get the full schema for a specific property (e.g. `property_name='flowchart'`)."
+            "\nCall this tool again with `property_name='<prop_name>'` to get the full "
+            "schema for a specific property (e.g. `property_name='flowchart'`)."
         )
         return "\n".join(summary)
 
     if property_name not in properties:
         return f"Property '{property_name}' not found in the root configuration schema."
 
-    # Resolve any $refs so the agent doesn't get useless pointers
     resolved_prop = _resolve_schema_refs(schema, properties[property_name])
-
     return json.dumps({property_name: resolved_prop}, indent=2)
 
 
-async def generate_mermaid(
-    message: str,
-    current_mermaid_code: str | None = None,
-    current_image: str | None = None,
-    history: list[HistoryMessage] | None = None,
-    chart_type: str | None = None,
-) -> dict:
-    """
-    Agentic loop: the LLM can fetch documentation and then generate a diagram.
-    """
-    messages: list[ModelMessage] = []
-
-    # Reconstruct history for Pydantic AI
-    if history:
-        for h in history:
-            if h.role == "user":
-                messages.append(ModelRequest(parts=[UserPromptPart(content=h.content)]))
-            else:
-                messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
-
-    user_prompt = ""
-    if chart_type:
-        user_prompt += f"Use the following diagram type: {chart_type}\n\n"
-    if current_mermaid_code:
-        user_prompt += f"Here is the current diagram code:\n\n```mermaid\n{current_mermaid_code}\n```\n\n"
-        if current_image:
-            user_prompt += "The attached image is the rendered output of this current diagram code.\n\n"
-
-    user_prompt += f"User Request: {message}"
-
-    prompt_parts = [user_prompt]
-    if current_image:
-        image_url = f"data:image/png;base64,{current_image}"
-        prompt_parts.append(BinaryContent.from_data_uri(image_url))
-
-    logger.info(
-        "generate_mermaid: calling LLM (history_len=%d, has_image=%s)",
-        len(messages),
-        current_image is not None,
-    )
-    try:
-        result = await mermaid_agent.run(
-            user_prompt=prompt_parts,
-            message_history=messages,
-        )
-    except Exception:
-        logger.exception(
-            "generate_mermaid: LLM call failed (model=%s, history_len=%d)",
-            MODEL,
-            len(messages),
-        )
-        raise
-
-    # The result.output is already constrained to be a ChatResponse
-    return result.output.model_dump()
-
-
-fix_agent = Agent(
-    model=llm,
-    output_type=FixResponse,
-    system_prompt=FIX_PROMPT,
-    retries=2,
-)
-
-fix_agent.tool(read_mermaid_syntax)
-fix_agent.tool(read_mermaid_config)
-
-
-async def generate_fix(
-    broken_code: str,
-    error: str,
-    history: list[HistoryMessage] | None = None,
-    fix_attempts: list[FixAttempt] | None = None,
-) -> dict:
-    """Fix a broken Mermaid diagram based on the rendering error."""
-    messages: list[ModelMessage] = []
-
-    if history:
-        for h in history:
-            if h.role == "user":
-                messages.append(ModelRequest(parts=[UserPromptPart(content=h.content)]))
-            else:
-                messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
-
-    if fix_attempts:
-        user_prompt = "Previous failed attempts to fix this diagram — do NOT repeat these mistakes:\n\n"
-        for i, attempt in enumerate(fix_attempts, 1):
-            user_prompt += (
-                f"Attempt {i}:\n"
-                f"Code:\n```mermaid\n{attempt.code}\n```\n"
-                f"Error: {attempt.error}\n\n"
-            )
-        user_prompt += "Now, the current Mermaid code still fails to render:\n\n"
-    else:
-        user_prompt = "The following Mermaid code failed to render:\n\n"
-
-    user_prompt += (
-        f"```mermaid\n{broken_code}\n```\n\n"
-        f"Error: {error}\n\n"
-        f"Please fix the syntax and return corrected Mermaid code."
-    )
-
-    logger.info(
-        "generate_fix: calling LLM (history_len=%d, fix_attempts=%d)",
-        len(messages),
-        len(fix_attempts) if fix_attempts else 0,
-    )
-    try:
-        result = await fix_agent.run(
-            user_prompt=user_prompt,
-            message_history=messages,
-        )
-    except Exception:
-        logger.exception(
-            "generate_fix: LLM call failed (model=%s, error_snippet=%r)",
-            MODEL,
-            error[:120],
-        )
-        raise
-
-    return result.output.model_dump()
-
-
-convert_agent = Agent(
-    model=llm,
-    output_type=ChatResponse,
-    system_prompt=IMAGE_TO_MERMAID_PROMPT,
-    retries=2,
-)
-
-# Share the same documentation fetcher tool
-convert_agent.tool(read_mermaid_syntax)
-convert_agent.tool(read_mermaid_config)
-
-
-async def image_to_mermaid(
+async def _enhance_image_impl(
     image_base64: str,
-    mime_type: str = "image/png",
-    user_message: str = "",
-) -> dict:
-    """
-    Accept a base64-encoded image and ask the vision model to reproduce
-    it as a Mermaid diagram using Pydantic AI.
-    """
-    logger.info("Image-to-mermaid request (mime=%s, msg=%r)", mime_type, user_message)
-
-    image_url = f"data:{mime_type};base64,{image_base64}"
-
-    # Construct a multimodal user prompt using Pydantic AI's structure
-    prompt_parts = [
-        user_message
-        if user_message.strip()
-        else "Please reproduce this image as a Mermaid diagram.",
-        BinaryContent.from_data_uri(image_url),
-    ]
-
-    logger.info(
-        "image_to_mermaid: calling LLM (model=%s, mime=%s)", MODEL, mime_type
-    )
-    try:
-        result = await convert_agent.run(
-            user_prompt=prompt_parts,
-        )
-    except Exception:
-        logger.exception(
-            "image_to_mermaid: LLM call failed (model=%s, mime=%s)",
-            MODEL,
-            mime_type,
-        )
-        raise
-
-    return result.output.model_dump()
-
-
-async def enhance_image(
-    image_base64: str,
+    instructions: str = "",
     message: str = "",
-    instructions: str | None = None,
 ) -> dict:
-    """
-    Evaluate a rendered Mermaid diagram and optionally enhance it using
-    Gemini's image generation capabilities via the shared GoogleProvider client.
-    """
+    """Call Gemini image generation to enhance a diagram. Shared by REST and WS paths."""
     prompt = ENHANCE_PROMPT + "\n\n"
     if message:
         prompt += f"Original user request: {message}\n\n"
@@ -362,7 +174,7 @@ async def enhance_image(
     logger.info(
         "enhance_image: calling Gemini (model=%s, has_instructions=%s)",
         ENHANCE_MODEL,
-        instructions is not None,
+        bool(instructions),
     )
 
     try:
@@ -385,18 +197,195 @@ async def enhance_image(
         text_parts: list[str] = []
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+                enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode(
+                    "utf-8"
+                )
             elif part.text:
                 text_parts.append(part.text)
         explanation = "\n\n".join(text_parts)
 
     if not explanation:
-        explanation = "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."
+        explanation = (
+            "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."
+        )
 
     logger.info(
         "enhance_image: done (enhanced=%s, explanation_len=%d)",
         enhanced_image_b64 is not None,
         len(explanation),
     )
-
     return {"enhanced_image": enhanced_image_b64, "explanation": explanation}
+
+
+# ══════════════════════════════════════════════════════════════════
+#  Unified WebSocket Agent
+# ══════════════════════════════════════════════════════════════════
+
+
+@dataclass
+class AgentDeps:
+    """Dependencies injected into unified agent tools at runtime."""
+
+    ws: WebSocket
+    pending_tools: dict[str, asyncio.Future] = field(default_factory=dict)
+
+    async def request_client_tool(self, name: str, args: dict) -> dict:
+        """Send a tool request to the frontend and await the result."""
+        tool_id = str(uuid4())
+        loop = asyncio.get_running_loop()
+        future = loop.create_future()
+        self.pending_tools[tool_id] = future
+
+        await self.ws.send_json(
+            {"type": "tool_request", "id": tool_id, "name": name, "args": args}
+        )
+
+        try:
+            return await asyncio.wait_for(future, timeout=60.0)
+        finally:
+            self.pending_tools.pop(tool_id, None)
+
+    def resolve_tool(self, tool_id: str, result: dict) -> None:
+        """Resolve a pending client tool request with the frontend's response."""
+        future = self.pending_tools.get(tool_id)
+        if future and not future.done():
+            future.set_result(result)
+
+
+unified_agent = Agent(
+    model=llm,
+    output_type=ChatResponse,
+    system_prompt=SYSTEM_PROMPT,
+    deps_type=AgentDeps,
+    retries=2,
+)
+
+
+@unified_agent.tool
+async def read_mermaid_syntax(
+    ctx: RunContext[AgentDeps], diagram_type: DiagramType
+) -> str:
+    """Fetch the complete Markdown documentation for a specific Mermaid diagram type."""
+    await ctx.deps.ws.send_json(
+        {"type": "status", "message": f"Looking up {diagram_type} syntax docs…"}
+    )
+    return _read_mermaid_syntax_impl(diagram_type)
+
+
+@unified_agent.tool
+async def read_mermaid_config(
+    ctx: RunContext[AgentDeps], property_name: str | None = None
+) -> str:
+    """Fetch the Mermaid configuration schema. If property_name is None, returns a summary of all top-level properties. If property_name is provided, returns the detailed, fully-resolved schema for that specific property."""
+    label = f"Reading config for '{property_name}'…" if property_name else "Reading config schema…"
+    await ctx.deps.ws.send_json({"type": "status", "message": label})
+    return _read_mermaid_config_impl(property_name)
+
+
+@unified_agent.tool
+async def render_and_capture(
+    ctx: RunContext[AgentDeps], mermaid_code: str
+) -> str:
+    """Render a Mermaid diagram in the user's browser and capture a screenshot.
+
+    Returns JSON with either:
+    - {"image": "<base64 PNG>"} on success
+    - {"error": "<error message>"} on render failure
+
+    If rendering fails, fix the code and try again (up to 3 total attempts).
+    """
+    await ctx.deps.ws.send_json(
+        {"type": "status", "message": "Rendering diagram…"}
+    )
+    result = await ctx.deps.request_client_tool(
+        "render_and_capture", {"mermaid_code": mermaid_code}
+    )
+    return json.dumps(result)
+
+
+@unified_agent.tool
+async def enhance_diagram(
+    ctx: RunContext[AgentDeps], instructions: str
+) -> str:
+    """Visually enhance the currently rendered diagram using AI image generation.
+
+    Mermaid's auto-layout often produces overlapping nodes, cramped labels, poor
+    spacing, or awkward aspect ratios. These are inherent layout limitations that
+    code changes cannot reliably fix. Call this tool to clean up such issues, or
+    whenever the user asks to improve the diagram's appearance or readability.
+    Captures the current diagram, enhances it, and sends the result to the user.
+    """
+    await ctx.deps.ws.send_json(
+        {"type": "status", "message": "Enhancing diagram with AI…"}
+    )
+    capture = await ctx.deps.request_client_tool("capture_screenshot", {})
+    if "error" in capture:
+        return "Cannot enhance: diagram has rendering errors. Fix the code first."
+
+    image_b64 = capture.get("image")
+    if not image_b64:
+        return "Cannot enhance: no diagram image available."
+
+    result = await _enhance_image_impl(image_b64, instructions=instructions)
+
+    if result.get("enhanced_image"):
+        await ctx.deps.ws.send_json(
+            {"type": "enhanced_image", "image": result["enhanced_image"]}
+        )
+        return result.get("explanation", "Enhanced the diagram successfully.")
+
+    return result.get("explanation", "No enhancement was needed.")
+
+
+async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
+    """Run the unified agent for a single conversation turn over WebSocket."""
+    msg_type = data.get("type", "user_message")
+
+    messages: list[ModelMessage] = []
+    for h in data.get("history", []):
+        if h.get("role") == "user":
+            messages.append(ModelRequest(parts=[UserPromptPart(content=h["content"])]))
+        else:
+            messages.append(ModelResponse(parts=[TextPart(content=h["content"])]))
+
+    if msg_type == "image_upload":
+        image_b64 = data["image"]
+        mime_type = data.get("mime_type", "image/png")
+        user_message = (
+            data.get("message", "").strip()
+            or "Please reproduce this image as a Mermaid diagram."
+        )
+        image_url = f"data:{mime_type};base64,{image_b64}"
+        prompt_parts = [user_message, BinaryContent.from_data_uri(image_url)]
+    else:
+        user_message = data.get("message", "")
+        chart_type = data.get("chart_type")
+        current_mermaid_code = data.get("current_mermaid_code")
+
+        user_prompt = ""
+        if chart_type:
+            user_prompt += f"Use the following diagram type: {chart_type}\n\n"
+        if current_mermaid_code:
+            user_prompt += (
+                f"Here is the current diagram code:\n\n"
+                f"```mermaid\n{current_mermaid_code}\n```\n\n"
+            )
+        user_prompt += f"User Request: {user_message}"
+        prompt_parts = [user_prompt]
+
+    await deps.ws.send_json({"type": "status", "message": "Thinking..."})
+
+    logger.info(
+        "run_unified_agent: type=%s, history_len=%d", msg_type, len(messages)
+    )
+    try:
+        result = await unified_agent.run(
+            user_prompt=prompt_parts,
+            message_history=messages,
+            deps=deps,
+        )
+    except Exception:
+        logger.exception("run_unified_agent: agent failed")
+        raise
+
+    return result.output.model_dump()

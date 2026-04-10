@@ -1,12 +1,11 @@
 from contextlib import asynccontextmanager
-import base64
+import asyncio
 
-from fastapi import FastAPI, HTTPException, File, UploadFile, Form
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.services.agent import generate_mermaid, generate_fix, image_to_mermaid, enhance_image
+from app.services.agent import run_unified_agent, AgentDeps
 from app.services.doc_fetcher import fetch_docs
-from app.schema import ChatRequest, ChatResponse, FixRequest, FixResponse, EnhanceRequest, EnhanceResponse
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,102 +29,104 @@ app.add_middleware(
 )
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(req: ChatRequest):
-    if not req.message.strip():
-        raise HTTPException(status_code=400, detail="Message cannot be empty")
-    try:
-        result = await generate_mermaid(
-            message=req.message,
-            current_mermaid_code=req.current_mermaid_code,
-            current_image=req.current_image,
-            history=req.history,
-            chart_type=req.chart_type,
-        )
-        return result
-    except Exception:
-        logger.exception("Error in /api/chat")
-        raise HTTPException(status_code=500, detail="Internal server error")
+# ══════════════════════════════════════════════════════════════════
+#  WebSocket Agent Endpoint
+# ══════════════════════════════════════════════════════════════════
 
 
-@app.post("/api/enhance", response_model=EnhanceResponse)
-async def enhance(req: EnhanceRequest):
-    try:
-        result = await enhance_image(
-            image_base64=req.image,
-            message=req.message,
-            instructions=req.instructions,
-        )
-        return result
-    except Exception:
-        logger.exception("Error in /api/enhance")
-        raise HTTPException(status_code=500, detail="Internal server error")
+async def _listen_for_tool_results(
+    ws: WebSocket,
+    deps: AgentDeps,
+    stop_event: asyncio.Event,
+    agent_task: asyncio.Task | None = None,
+) -> None:
+    """Receive messages from the frontend and resolve pending tool futures.
+
+    Also handles 'stop' messages by cancelling the running agent task.
+    """
+    while not stop_event.is_set():
+        try:
+            msg = await asyncio.wait_for(ws.receive_json(), timeout=1.0)
+        except asyncio.TimeoutError:
+            continue
+        except (WebSocketDisconnect, RuntimeError):
+            break
+
+        msg_type = msg.get("type")
+
+        if msg_type == "stop":
+            logger.info("Received stop request from client")
+            if agent_task and not agent_task.done():
+                agent_task.cancel()
+            break
+
+        if msg_type == "tool_result":
+            tool_id = msg.get("id")
+            if tool_id:
+                result = msg.get("result", {})
+                deps.resolve_tool(tool_id, result)
 
 
-@app.post("/api/fix", response_model=FixResponse)
-async def fix(req: FixRequest):
-    try:
-        result = await generate_fix(
-            broken_code=req.broken_code,
-            error=req.error,
-            history=req.history,
-            fix_attempts=req.fix_attempts,
-        )
-        return result
-    except Exception:
-        logger.exception("Error in /api/fix")
-        raise HTTPException(status_code=500, detail="Internal server error")
-
-
-MAX_IMAGE_SIZE = 1 * 1024 * 1024  # 1 MB
-
-
-@app.post("/api/chat/image", response_model=ChatResponse)
-async def chat_image(
-    image: UploadFile = File(...),
-    message: str = Form(""),
-):
-    """Accept an image upload and convert it to a Mermaid diagram."""
-    # Validate file type
-    allowed_types = {
-        "image/png",
-        "image/jpeg",
-        "image/webp",
-        "image/heic",
-        "image/heif",
-    }
-    if image.content_type not in allowed_types:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported image type: {image.content_type}. Use PNG, JPEG, WebP, HEIC, or HEIF.",
-        )
+@app.websocket("/api/chat/ws")
+async def chat_ws(ws: WebSocket):
+    await ws.accept()
 
     try:
-        # Read in chunks to abort early on oversized uploads
-        chunks = []
-        total = 0
-        while chunk := await image.read(64 * 1024):
-            total += len(chunk)
-            if total > MAX_IMAGE_SIZE:
-                raise HTTPException(
-                    status_code=400,
-                    detail="Image too large. Maximum size is 1 MB.",
-                )
-            chunks.append(chunk)
-        image_bytes = b"".join(chunks)
+        data = await ws.receive_json()
+        msg_type = data.get("type")
 
-        image_b64 = base64.b64encode(image_bytes).decode("utf-8")
-        result = await image_to_mermaid(
-            image_base64=image_b64,
-            mime_type=image.content_type or "image/png",
-            user_message=message,
+        if msg_type not in ("user_message", "image_upload"):
+            await ws.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+            await ws.send_json({"type": "done"})
+            return
+
+        deps = AgentDeps(ws=ws)
+        stop_event = asyncio.Event()
+
+        agent_task = asyncio.create_task(run_unified_agent(deps, data))
+
+        listener = asyncio.create_task(
+            _listen_for_tool_results(ws, deps, stop_event, agent_task)
         )
-        return result
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Error in /api/chat/image")
-        raise HTTPException(status_code=500, detail="Internal server error")
+
+        try:
+            result = await agent_task
+
+            await ws.send_json({
+                "type": "message",
+                "content": result.get("explanation", ""),
+                "follow_up_commands": result.get("follow_up_commands", []),
+                "mermaid_code": result.get("mermaid_code"),
+            })
+        except asyncio.CancelledError:
+            logger.info("Agent task cancelled by client stop request")
+            await ws.send_json({"type": "error", "message": "Stopped by user"})
+        except Exception as e:
+            logger.exception("WebSocket agent error")
+            await ws.send_json({"type": "error", "message": str(e)})
+        finally:
+            stop_event.set()
+            listener.cancel()
+            try:
+                await listener
+            except asyncio.CancelledError:
+                pass
+
+        await ws.send_json({"type": "done"})
+
+    except WebSocketDisconnect:
+        logger.info("WebSocket client disconnected")
+    except Exception as e:
+        logger.exception("WebSocket handler error")
+        try:
+            await ws.send_json({"type": "error", "message": str(e)})
+        except Exception:
+            pass
+    finally:
+        try:
+            await ws.close()
+        except Exception:
+            pass
 
 
 @app.get("/health")

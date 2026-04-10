@@ -1,7 +1,6 @@
 import type { Message } from "$lib/types";
-import { sendChat, sendFix, sendImage, sendEnhance } from "$lib/api";
+import { sendWsMessage, type WsCallbacks, type WsHandle, type UserMessagePayload, type ImageUploadPayload } from "$lib/ws";
 
-export type Mode = "auto" | "generate" | "enhance";
 export type PreviewTab = "mermaid" | "enhanced";
 
 function buildHistory(
@@ -46,14 +45,9 @@ flowchart TD
     %% Feedback Loops
     Code -- "iterate/feedback" --> AI`;
 
-const MAX_AUTO_FIX = 3;
-
 export function createChatStore() {
   let diagramCode = $state(DEFAULT_DIAGRAM);
   let codeSource: "ai" | "user" = $state("user");
-  let autoFixPending = $state(false);
-  let autoFixCount = $state(0);
-  let fixAttempts = $state<{ code: string; error: string }[]>([]);
 
   let messages = $state<Message[]>([
     {
@@ -64,139 +58,128 @@ export function createChatStore() {
   ]);
   let isLoading = $state(false);
 
-  // Mode & chart type selections
-  let mode: Mode = $state("auto");
   let chartType: string | null = $state(null);
 
   // Enhancement state
   let enhancedImage: string | null = $state(null);
   let activePreviewTab: PreviewTab = $state("mermaid");
-  let isEnhancing = $state(false);
 
-  // Callback to capture a diagram screenshot — set by the page component
+  // Status message from agent tools (e.g. "Rendering diagram…")
+  let statusMessage: string | null = $state(null);
+
+  let activeWsHandle: WsHandle | null = null;
+
+  // Callbacks set by the page component to interact with the Preview
   let getDiagramImage: (() => Promise<string | null>) | null = null;
+  let renderMermaidCode: ((code: string) => Promise<{ error?: string }>) | null = null;
 
-  // Callback to wait for mermaid render to complete — set by page component
-  let waitForRender: (() => Promise<void>) | null = null;
+  /**
+   * Build WsCallbacks that wire tool requests into the Preview component.
+   */
+  function makeWsCallbacks(userMessage: string): WsCallbacks {
+    return {
+      onStatus(msg: string) {
+        statusMessage = msg || null;
+      },
 
-  async function runEnhance(userMessage: string, instructions?: string | null) {
-    if (!getDiagramImage) {
-      messages.push({
-        role: "assistant",
-        content: "Unable to capture the diagram. Please ensure a diagram is rendered first.",
-      });
-      return;
-    }
-    isEnhancing = true;
-    activePreviewTab = "enhanced";
-    try {
-      const image = await getDiagramImage();
-      if (!image) {
-        isEnhancing = false;
-        activePreviewTab = "mermaid";
+      onMermaidCode(code: string) {
+        codeSource = "ai";
+        diagramCode = code;
+      },
+
+      onEnhancedImage(image: string) {
+        enhancedImage = image;
+        activePreviewTab = "enhanced";
+      },
+
+      onMessage(content: string, followUpCommands: string[], mermaidCode: string | null) {
+        if (mermaidCode) {
+          codeSource = "ai";
+          diagramCode = mermaidCode;
+        }
         messages.push({
           role: "assistant",
-          content: "Could not capture the diagram image. Please ensure the diagram is rendered without errors.",
+          content,
+          followUpSuggestions: followUpCommands,
         });
-        return;
-      }
-      const result = await sendEnhance({
-        image,
-        message: userMessage,
-        instructions: instructions ?? undefined,
-      });
-      if (result.enhanced_image) {
-        enhancedImage = result.enhanced_image;
-        if (result.explanation) {
-          messages.push({ role: "assistant", content: result.explanation });
+      },
+
+      onError(message: string) {
+        messages.push({
+          role: "assistant",
+          content: `Error: ${message}`,
+        });
+      },
+
+      onDone() {
+        isLoading = false;
+        statusMessage = null;
+      },
+
+      async renderAndCapture(mermaidCode: string) {
+        codeSource = "ai";
+        diagramCode = mermaidCode;
+
+        if (renderMermaidCode) {
+          const result = await renderMermaidCode(mermaidCode);
+          if (result.error) {
+            return { error: result.error };
+          }
         }
-      } else {
-        activePreviewTab = "mermaid";
-        if (result.explanation) {
-          messages.push({ role: "assistant", content: result.explanation });
+
+        // Wait a tick for the render to propagate, then capture
+        await new Promise((r) => setTimeout(r, 600));
+
+        if (getDiagramImage) {
+          const image = await getDiagramImage();
+          if (image) {
+            return { image };
+          }
+          return { error: "Failed to capture diagram image" };
         }
-      }
-    } catch (e: any) {
-      activePreviewTab = "mermaid";
-      messages.push({
-        role: "assistant",
-        content: `Enhancement error: ${e.message ?? "Could not reach the backend."}`,
-      });
-    } finally {
-      isEnhancing = false;
-    }
+        return { error: "Diagram capture not available" };
+      },
+
+      async captureScreenshot() {
+        if (getDiagramImage) {
+          const image = await getDiagramImage();
+          if (image) {
+            return { image };
+          }
+          return { error: "Failed to capture diagram image" };
+        }
+        return { error: "Diagram capture not available" };
+      },
+    };
   }
 
-  async function sendChatRequest(
-    userMessage: string,
-    contextDiagram: string | null,
-  ) {
-    autoFixCount = 0;
-    fixAttempts = [];
+  async function sendChatRequest(userMessage: string, contextDiagram: string | null) {
     isLoading = true;
 
-    if (mode === "enhance") {
-      try {
-        await runEnhance(userMessage);
-      } finally {
-        isLoading = false;
-      }
-      return;
+    const history = buildHistory(messages, { skip: "both" });
+
+    if (contextDiagram === DEFAULT_DIAGRAM) {
+      contextDiagram = null;
     }
 
-    let enhanceInstructions: string | null = null;
+    const payload: UserMessagePayload = {
+      type: "user_message",
+      message: userMessage,
+      current_mermaid_code: contextDiagram,
+      history,
+      chart_type: chartType,
+    };
+
+    const callbacks = makeWsCallbacks(userMessage);
+    const handle = sendWsMessage(payload, callbacks);
+    activeWsHandle = handle;
 
     try {
-      const history = buildHistory(messages, { skip: "both" });
-
-      if (contextDiagram === DEFAULT_DIAGRAM) {
-        contextDiagram = null;
-      }
-
-      let current_image = null;
-      if (getDiagramImage && contextDiagram) {
-        current_image = await getDiagramImage();
-      }
-
-      const data = await sendChat({
-        message: userMessage,
-        current_mermaid_code: contextDiagram,
-        current_image,
-        history,
-        mode,
-        chart_type: chartType,
-      });
-
-      messages.push({
-        role: "assistant",
-        content: data.explanation,
-        followUpSuggestions: data.follow_up_commands,
-      });
-
-      if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
-      }
-
-      if (mode === "generate") {
-        activePreviewTab = "mermaid";
-      }
-
-      enhanceInstructions = data.enhance_instructions;
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
+      await handle.done;
+    } catch {
+      // Errors are already handled by onError callback
     } finally {
-      isLoading = false;
-    }
-
-    if (enhanceInstructions) {
-      if (waitForRender) {
-        await waitForRender();
-      }
-      await runEnhance(userMessage, enhanceInstructions);
+      activeWsHandle = null;
     }
   }
 
@@ -206,8 +189,6 @@ export function createChatStore() {
   }
 
   async function handleImageUpload(file: File, userMessage: string) {
-    autoFixCount = 0;
-    fixAttempts = [];
     const previewUrl = URL.createObjectURL(file);
     messages.push({
       role: "user",
@@ -216,26 +197,36 @@ export function createChatStore() {
     });
 
     isLoading = true;
+
+    const history = buildHistory(messages, { skip: "both" });
+
+    // Read file as base64
+    const arrayBuf = await file.arrayBuffer();
+    const bytes = new Uint8Array(arrayBuf);
+    let binary = "";
+    for (let i = 0; i < bytes.length; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    const base64 = btoa(binary);
+
+    const payload: ImageUploadPayload = {
+      type: "image_upload",
+      image: base64,
+      mime_type: file.type || "image/png",
+      message: userMessage,
+      history,
+    };
+
+    const callbacks = makeWsCallbacks(userMessage);
+    const handle = sendWsMessage(payload, callbacks);
+    activeWsHandle = handle;
+
     try {
-      const data = await sendImage(file, userMessage);
-
-      messages.push({
-        role: "assistant",
-        content: data.explanation,
-        followUpSuggestions: data.follow_up_commands,
-      });
-
-      if (data.mermaid_code) {
-        codeSource = "ai";
-        diagramCode = data.mermaid_code;
-      }
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
+      await handle.done;
+    } catch {
+      // Errors handled by onError callback
     } finally {
-      isLoading = false;
+      activeWsHandle = null;
       URL.revokeObjectURL(previewUrl);
     }
   }
@@ -245,119 +236,38 @@ export function createChatStore() {
     diagramCode = code;
   }
 
-  async function performFix(code: string, error: string): Promise<void> {
-    const history = buildHistory(messages, { skip: "first" });
-
-    const data = await sendFix({
-      broken_code: code,
-      error,
-      history,
-      fix_attempts: fixAttempts,
-    });
-
-    fixAttempts = [...fixAttempts, { code, error }];
-
-    if (data.mermaid_code) {
-      codeSource = "ai";
-      diagramCode = data.mermaid_code;
+  function stopAgent() {
+    if (activeWsHandle) {
+      activeWsHandle.stop();
+      activeWsHandle = null;
     }
+    isLoading = false;
+    statusMessage = null;
   }
 
-  function updateOrPushSystemFix(content: string) {
-    const last = messages[messages.length - 1];
-    if (last && last.role === "system" && last._fixNotice) {
-      last.content = content;
-    } else {
-      messages.push({ role: "system", content, _fixNotice: true });
-    }
-  }
-
-  async function handleRenderError(code: string, error: string) {
-    if (codeSource !== "ai" || autoFixPending || isLoading) return;
-
-    if (autoFixCount >= MAX_AUTO_FIX) {
-      if (autoFixCount === MAX_AUTO_FIX) {
-        updateOrPushSystemFix(
-          `Auto-fix failed after ${MAX_AUTO_FIX} attempts. Please fix the code manually.\n\`${error.split("\n")[0]}\``,
-        );
-        autoFixCount++;
-      }
-      return;
-    }
-
-    autoFixPending = true;
-    autoFixCount++;
-
-    updateOrPushSystemFix(
-      `Rendering error detected — asking AI to fix it automatically (Attempt ${autoFixCount}/${MAX_AUTO_FIX})...\n\`${error.split("\n")[0]}\``,
-    );
-
-    try {
-      isLoading = true;
-      await performFix(code, error);
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
-    } finally {
-      isLoading = false;
-      autoFixPending = false;
-    }
-  }
-
-  async function handleFixRequest(code: string, error: string) {
-    if (isLoading || autoFixPending) return;
-    autoFixCount = 0;
-    fixAttempts = [];
-    autoFixPending = true;
-
-    updateOrPushSystemFix(
-      `Asking AI to fix the code...\n\`${error.split("\n")[0]}\``,
-    );
-    try {
-      isLoading = true;
-      await performFix(code, error);
-    } catch (e: any) {
-      messages.push({
-        role: "assistant",
-        content: `Error: ${e.message ?? "Could not reach the backend. Is it running?"}`,
-      });
-    } finally {
-      isLoading = false;
-      autoFixPending = false;
-    }
-  }
-
-  async function handleManualEnhance(instructions?: string) {
-    if (isLoading || isEnhancing) return;
-    isLoading = true;
-    try {
-      await runEnhance("", instructions);
-    } finally {
-      isLoading = false;
-    }
+  function handleFixRequest(code: string, error: string) {
+    if (isLoading) return;
+    const fixMsg = `Fix the rendering error in the Mermaid code.\nError: ${error}`;
+    messages.push({ role: "user", content: fixMsg });
+    sendChatRequest(fixMsg, code);
   }
 
   return {
     get diagramCode() { return diagramCode; },
     get messages() { return messages; },
     get isLoading() { return isLoading; },
-    get mode() { return mode; },
-    set mode(v: Mode) { mode = v; },
     get chartType() { return chartType; },
     set chartType(v: string | null) { chartType = v; },
     get enhancedImage() { return enhancedImage; },
     get activePreviewTab() { return activePreviewTab; },
     set activePreviewTab(v: PreviewTab) { activePreviewTab = v; },
-    get isEnhancing() { return isEnhancing; },
+    get statusMessage() { return statusMessage; },
     set getDiagramImage(fn: (() => Promise<string | null>) | null) { getDiagramImage = fn; },
-    set waitForRender(fn: (() => Promise<void>) | null) { waitForRender = fn; },
+    set renderMermaidCode(fn: ((code: string) => Promise<{ error?: string }>) | null) { renderMermaidCode = fn; },
     handleUserSubmit,
     handleImageUpload,
     handleCodeChange,
-    handleRenderError,
     handleFixRequest,
-    handleManualEnhance,
+    stopAgent,
   };
 }

@@ -8,7 +8,8 @@
   let {
     code,
     onCodeChange,
-  }: { code: string; onCodeChange: (code: string) => void } = $props();
+    onFocus,
+  }: { code: string; onCodeChange: (code: string) => void; onFocus?: () => void } = $props();
 
   let editorEl: HTMLDivElement;
   let view: EditorView | null = null;
@@ -34,6 +35,9 @@
         EditorView.updateListener.of((update) => {
           if (update.docChanged && !isUpdatingFromParent) {
             onCodeChange(update.state.doc.toString());
+          }
+          if (update.focusChanged && update.view.hasFocus) {
+            onFocus?.();
           }
         }),
       ],
