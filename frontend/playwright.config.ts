@@ -6,6 +6,9 @@ export default defineConfig({
     retries: 0,
     use: {
         baseURL: 'http://localhost:5173',
+        launchOptions: {
+            args: ['--no-sandbox', '--disable-setuid-sandbox', '--disable-dev-shm-usage'],
+        },
     },
     projects: [
         { name: 'chromium', use: { browserName: 'chromium' } },

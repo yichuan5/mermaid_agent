@@ -1,12 +1,9 @@
 import type { Message } from "$lib/types";
-import { sendChat, sendFix, sendImage } from "$lib/api";
+import { sendChat, sendFix, sendImage, sendEnhance } from "$lib/api";
 
-/**
- * Build a conversation history suitable for the backend.
- * - Excludes system messages
- * - Removes consecutive entries with the same role (keeps the last one)
- *   so the array always strictly alternates user/assistant.
- */
+export type Mode = "auto" | "generate" | "enhance";
+export type PreviewTab = "mermaid" | "enhanced";
+
 function buildHistory(
   msgs: Message[],
   { skip }: { skip?: "first" | "last" | "both" } = {},
@@ -19,11 +16,10 @@ function buildHistory(
     .filter((m) => m.role === "user" || m.role === "assistant")
     .map((m) => ({ role: m.role, content: m.content }));
 
-  // Deduplicate consecutive same-role entries (keep the last of each run)
   const deduped: { role: string; content: string }[] = [];
   for (const m of filtered) {
     if (deduped.length > 0 && deduped[deduped.length - 1].role === m.role) {
-      deduped[deduped.length - 1] = m; // replace with the later one
+      deduped[deduped.length - 1] = m;
     } else {
       deduped.push(m);
     }
@@ -68,8 +64,58 @@ export function createChatStore() {
   ]);
   let isLoading = $state(false);
 
+  // Mode & chart type selections
+  let mode: Mode = $state("auto");
+  let chartType: string | null = $state(null);
+
+  // Enhancement state
+  let enhancedImage: string | null = $state(null);
+  let activePreviewTab: PreviewTab = $state("mermaid");
+  let isEnhancing = $state(false);
+
   // Callback to capture a diagram screenshot — set by the page component
   let getDiagramImage: (() => Promise<string | null>) | null = null;
+
+  // Callback to wait for mermaid render to complete — set by page component
+  let waitForRender: (() => Promise<void>) | null = null;
+
+  async function runEnhance(userMessage: string, instructions?: string | null) {
+    if (!getDiagramImage) return;
+    isEnhancing = true;
+    activePreviewTab = "enhanced";
+    try {
+      const image = await getDiagramImage();
+      if (!image) {
+        isEnhancing = false;
+        activePreviewTab = "mermaid";
+        return;
+      }
+      const result = await sendEnhance({
+        image,
+        message: userMessage,
+        instructions: instructions ?? undefined,
+      });
+      if (result.enhanced_image) {
+        enhancedImage = result.enhanced_image;
+        if (result.explanation) {
+          messages.push({ role: "system", content: result.explanation });
+        }
+      } else {
+        activePreviewTab = "mermaid";
+        if (result.explanation) {
+          messages.push({ role: "system", content: result.explanation });
+        }
+      }
+    } catch (e: any) {
+      activePreviewTab = "mermaid";
+      messages.push({
+        role: "assistant",
+        content: `Enhancement error: ${e.message ?? "Could not reach the backend."}`,
+      });
+    } finally {
+      isEnhancing = false;
+    }
+  }
 
   async function sendChatRequest(
     userMessage: string,
@@ -78,6 +124,13 @@ export function createChatStore() {
     autoFixCount = 0;
     fixAttempts = [];
     isLoading = true;
+
+    if (mode === "enhance") {
+      isLoading = false;
+      await runEnhance(userMessage);
+      return;
+    }
+
     try {
       const history = buildHistory(messages, { skip: "both" });
 
@@ -95,6 +148,8 @@ export function createChatStore() {
         current_mermaid_code: contextDiagram,
         current_image,
         history,
+        mode,
+        chart_type: chartType,
       });
 
       messages.push({
@@ -107,6 +162,10 @@ export function createChatStore() {
         codeSource = "ai";
         diagramCode = data.mermaid_code;
       }
+
+      if (mode === "generate") {
+        activePreviewTab = "mermaid";
+      }
     } catch (e: any) {
       messages.push({
         role: "assistant",
@@ -114,6 +173,14 @@ export function createChatStore() {
       });
     } finally {
       isLoading = false;
+    }
+
+    // Auto mode: after code gen + render, evaluate with enhance agent
+    if (mode === "auto") {
+      if (waitForRender) {
+        await waitForRender();
+      }
+      await runEnhance(userMessage);
     }
   }
 
@@ -240,15 +307,30 @@ export function createChatStore() {
     }
   }
 
+  async function handleManualEnhance(instructions?: string) {
+    if (isLoading || isEnhancing) return;
+    await runEnhance("", instructions);
+  }
+
   return {
     get diagramCode() { return diagramCode; },
     get messages() { return messages; },
     get isLoading() { return isLoading; },
+    get mode() { return mode; },
+    set mode(v: Mode) { mode = v; },
+    get chartType() { return chartType; },
+    set chartType(v: string | null) { chartType = v; },
+    get enhancedImage() { return enhancedImage; },
+    get activePreviewTab() { return activePreviewTab; },
+    set activePreviewTab(v: PreviewTab) { activePreviewTab = v; },
+    get isEnhancing() { return isEnhancing; },
     set getDiagramImage(fn: (() => Promise<string | null>) | null) { getDiagramImage = fn; },
+    set waitForRender(fn: (() => Promise<void>) | null) { waitForRender = fn; },
     handleUserSubmit,
     handleImageUpload,
     handleCodeChange,
     handleRenderError,
     handleFixRequest,
+    handleManualEnhance,
   };
 }

@@ -9,6 +9,8 @@ export interface ChatPayload {
     current_mermaid_code: string | null;
     current_image: string | null;
     history: { role: string; content: string }[];
+    mode?: string;
+    chart_type?: string | null;
 }
 
 export async function sendChat(payload: ChatPayload): Promise<ChatResponse> {
@@ -56,6 +58,30 @@ export async function sendImage(file: File, message: string): Promise<ChatRespon
     const res = await fetch(`/api/chat/image`, {
         method: "POST",
         body: formData,
+    });
+    if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail ?? `Server error ${res.status}`);
+    }
+    return res.json();
+}
+
+export interface EnhancePayload {
+    image: string;
+    message?: string;
+    instructions?: string | null;
+}
+
+export interface EnhanceResponse {
+    enhanced_image: string | null;
+    explanation: string;
+}
+
+export async function sendEnhance(payload: EnhancePayload): Promise<EnhanceResponse> {
+    const res = await fetch(`/api/enhance`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
     });
     if (!res.ok) {
         const err = await res.json().catch(() => ({}));

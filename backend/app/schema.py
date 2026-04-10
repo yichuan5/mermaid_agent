@@ -11,6 +11,8 @@ class ChatRequest(BaseModel):
     current_mermaid_code: str | None = Field(default=None, max_length=50000)
     current_image: str | None = None
     history: list[HistoryMessage] = Field(default=[], max_length=100)
+    mode: str = Field(default="auto", pattern="^(auto|generate|enhance)$")
+    chart_type: str | None = Field(default=None, max_length=100)
 
 
 class FixAttempt(BaseModel):
@@ -41,3 +43,17 @@ class FixResponse(BaseModel):
     mermaid_code: str = Field(
         description="The corrected raw mermaid code. Do NOT enclose it in markdown code blocks (e.g. ```mermaid ... ```).",
     )
+
+
+class EnhanceRequest(BaseModel):
+    image: str = Field(description="Base64-encoded PNG of the rendered mermaid diagram")
+    message: str = Field(default="", max_length=10000, description="The original user message for context")
+    instructions: str | None = Field(default=None, max_length=10000, description="Optional custom enhancement instructions")
+
+
+class EnhanceResponse(BaseModel):
+    enhanced_image: str | None = Field(
+        default=None,
+        description="Base64-encoded PNG of the enhanced image, or null if no enhancement needed",
+    )
+    explanation: str = Field(default="", description="Brief explanation of what was done or why enhancement was skipped")

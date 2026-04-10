@@ -1,4 +1,32 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
+
+// Block external requests (Google Fonts) that hang in WSL2 and prevent page load
+async function blockExternalRequests(page: Page) {
+    await page.route('**/*.googleapis.com/**', (route) => route.abort());
+    await page.route('**/*.gstatic.com/**', (route) => route.abort());
+}
+
+// Wait for Svelte hydration (the app sets data-hydrated after onMount)
+async function waitForHydration(page: Page) {
+    await page.locator('[data-hydrated]').waitFor({ state: 'attached', timeout: 10_000 });
+}
+
+// Select an option and dispatch a bubbling change event (works with Svelte 5 event delegation)
+async function svelteSelect(page: Page, selector: string, value: string) {
+    await page.locator(selector).selectOption(value);
+    await page.locator(selector).dispatchEvent('change');
+}
+
+// Default enhance mock: returns no enhancement (used by most tests)
+function mockEnhanceSkip(page: Page) {
+    return page.route('**/api/enhance', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ enhanced_image: null, explanation: 'No enhancement needed.' }),
+        }),
+    );
+}
 
 test('sending a message displays AI response and renders a diagram', async ({ page }) => {
     // ── Mock the backend API ─────────────────────────────────────
@@ -13,14 +41,13 @@ test('sending a message displays AI response and renders a diagram', async ({ pa
             }),
         }),
     );
+    await mockEnhanceSkip(page);
 
     // ── Load the app ─────────────────────────────────────────────
+    await blockExternalRequests(page);
     await page.goto('/');
 
-    // Wait for the initial greeting to confirm the page loaded
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── Send a chat message ──────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -33,7 +60,7 @@ test('sending a message displays AI response and renders a diagram', async ({ pa
     ).toContainText('Here is a simple flowchart.', { timeout: 10_000 });
 
     // ── Assert a Mermaid diagram (SVG) rendered in the preview ───
-    const previewSvg = page.locator('.preview-panel svg');
+    const previewSvg = page.locator('.diagram-wrapper svg');
     await expect(previewSvg).toBeVisible({ timeout: 10_000 });
 
     // Verify the SVG actually contains content from our mocked code
@@ -47,11 +74,9 @@ test('shows error message when backend is down', async ({ page }) => {
         route.abort('connectionrefused'),
     );
 
+    await blockExternalRequests(page);
     await page.goto('/');
-
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── Send a message ──────────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -80,12 +105,11 @@ test('image upload generates a diagram', async ({ page }) => {
             }),
         }),
     );
+    await mockEnhanceSkip(page);
 
+    await blockExternalRequests(page);
     await page.goto('/');
-
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── Create a tiny test PNG in memory ────────────────────────
     // 1×1 red pixel PNG (smallest valid PNG)
@@ -120,7 +144,7 @@ test('image upload generates a diagram', async ({ page }) => {
     ).toContainText('I converted your image', { timeout: 10_000 });
 
     // ── Assert a diagram SVG rendered ───────────────────────────
-    const previewSvg = page.locator('.preview-panel svg');
+    const previewSvg = page.locator('.diagram-wrapper svg');
     await expect(previewSvg).toBeVisible({ timeout: 10_000 });
 });
 
@@ -128,6 +152,7 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
     let chatRequests = 0;
     let fixRequests = 0;
     const fixPayloads: any[] = [];
+    await mockEnhanceSkip(page);
 
     // ── Mock the backend to always return invalid Mermaid code ────
     await page.route('**/api/chat', (route) => {
@@ -159,11 +184,9 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
         });
     });
 
+    await blockExternalRequests(page);
     await page.goto('/');
-
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── Send a message ──────────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -197,6 +220,7 @@ test('stops auto-fixing after max retries when code is invalid', async ({ page }
 
 test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
     let fixRequests = 0;
+    await mockEnhanceSkip(page);
     await page.route('**/api/fix', async (route) => {
         fixRequests++;
         await route.fulfill({
@@ -210,6 +234,7 @@ test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
         });
     });
 
+    await blockExternalRequests(page);
     await page.goto('/');
 
     // Type invalid code to trigger render error
@@ -228,12 +253,13 @@ test('clicking Fix with AI button triggers a fix request', async ({ page }) => {
     expect(fixRequests).toBe(1);
 
     // Verify the code gets updated
-    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.diagram-wrapper svg')).toBeVisible({ timeout: 10_000 });
 });
 
 
 test('initial message followed by a follow-up message both render diagrams without errors', async ({ page }) => {
     let requestCount = 0;
+    await mockEnhanceSkip(page);
 
     await page.route('**/api/chat', (route) => {
         requestCount++;
@@ -250,10 +276,9 @@ test('initial message followed by a follow-up message both render diagrams witho
         });
     });
 
+    await blockExternalRequests(page);
     await page.goto('/');
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── First message ────────────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -263,7 +288,7 @@ test('initial message followed by a follow-up message both render diagrams witho
     await expect(
         page.locator('.message.assistant .message-bubble').nth(1),
     ).toContainText('First diagram.', { timeout: 10_000 });
-    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.diagram-wrapper svg')).toBeVisible({ timeout: 10_000 });
 
     // ── Send a follow-up message ─────────────────────────────────
     await textarea.fill('Add another step in the middle');
@@ -272,7 +297,7 @@ test('initial message followed by a follow-up message both render diagrams witho
     await expect(
         page.locator('.message.assistant .message-bubble').nth(2),
     ).toContainText('Updated diagram.', { timeout: 10_000 });
-    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.diagram-wrapper svg')).toBeVisible({ timeout: 10_000 });
 
     // ── Assert no error messages appeared ────────────────────────
     const errorMessages = page.locator('.message.assistant .message-bubble').filter({ hasText: 'Error:' });
@@ -283,6 +308,7 @@ test('initial message followed by a follow-up message both render diagrams witho
 
 test('follow-up message after fix sends strictly alternating history to the backend', async ({ page }) => {
     const chatPayloads: any[] = [];
+    await mockEnhanceSkip(page);
 
     await page.route('**/api/chat', async (route) => {
         const body = route.request().postDataJSON();
@@ -306,10 +332,9 @@ test('follow-up message after fix sends strictly alternating history to the back
         }),
     );
 
+    await blockExternalRequests(page);
     await page.goto('/');
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── First chat request ───────────────────────────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -331,7 +356,7 @@ test('follow-up message after fix sends strictly alternating history to the back
     await fixBtn.click();
 
     // Wait for the fixed diagram SVG and for loading to clear
-    await expect(page.locator('.preview-panel svg')).toBeVisible({ timeout: 10_000 });
+    await expect(page.locator('.diagram-wrapper svg')).toBeVisible({ timeout: 10_000 });
     await expect(page.locator('.thinking-badge')).not.toBeVisible({ timeout: 5_000 });
 
     // ── Send follow-up — this was what triggered the 500 ─────────
@@ -358,6 +383,7 @@ test('follow-up message after fix sends strictly alternating history to the back
 });
 test('history sent to /api/fix always starts with a user message, never an assistant', async ({ page }) => {
     const fixPayloads: any[] = [];
+    await mockEnhanceSkip(page);
 
     // First chat returns valid code so we get a proper conversation turn in history
     await page.route('**/api/chat', (route) =>
@@ -382,10 +408,9 @@ test('history sent to /api/fix always starts with a user message, never an assis
         });
     });
 
+    await blockExternalRequests(page);
     await page.goto('/');
-    await expect(
-        page.locator('.message.assistant .message-bubble').first(),
-    ).toBeVisible({ timeout: 10_000 });
+    await waitForHydration(page);
 
     // ── Send a chat message to populate history ──────────────────
     const textarea = page.locator('.chat-panel textarea');
@@ -425,5 +450,269 @@ test('history sent to /api/fix always starts with a user message, never an assis
             ).not.toBe(history[i - 1].role);
         }
     }
+});
+
+
+// ── Mode dropdown and chart type tests ──────────────────────────
+
+test('mode dropdown defaults to Auto and chart type dropdown is visible', async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    const modeSelect = page.locator('#mode-select');
+    await expect(modeSelect).toBeVisible();
+    await expect(modeSelect).toHaveValue('auto');
+
+    const chartSelect = page.locator('#chart-select');
+    await expect(chartSelect).toBeVisible();
+    await expect(chartSelect).toHaveValue('');
+});
+
+test('chart type dropdown hides when Enhance Graph mode is selected', async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    // Chart type visible in auto mode
+    await expect(page.locator('#chart-select')).toBeVisible();
+
+    // Switch to enhance mode
+    await svelteSelect(page, '#mode-select', 'enhance');
+    await expect(page.locator('#chart-select')).not.toBeVisible();
+
+    // Switch back to generate mode — chart type should reappear
+    await svelteSelect(page, '#mode-select', 'generate');
+    await expect(page.locator('#chart-select')).toBeVisible();
+});
+
+test('Generate Code mode sends mode and chart_type to backend', async ({ page }) => {
+    const chatPayloads: any[] = [];
+
+    await page.route('**/api/chat', async (route) => {
+        const body = route.request().postDataJSON();
+        chatPayloads.push(body);
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'sequenceDiagram\n    A->>B: Hello',
+                explanation: 'A sequence diagram.',
+                follow_up_commands: [],
+            }),
+        });
+    });
+
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    // Switch to Generate Code mode and select a chart type
+    await svelteSelect(page, '#mode-select', 'generate');
+    await svelteSelect(page, '#chart-select', 'sequenceDiagram');
+
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a sequence diagram');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('A sequence diagram.', { timeout: 10_000 });
+
+    // Verify mode and chart_type were sent
+    expect(chatPayloads.length).toBe(1);
+    expect(chatPayloads[0].mode).toBe('generate');
+    expect(chatPayloads[0].chart_type).toBe('sequenceDiagram');
+});
+
+test('Generate Code mode does not call /api/enhance', async ({ page }) => {
+    let enhanceRequests = 0;
+
+    await page.route('**/api/chat', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A --> B',
+                explanation: 'Done.',
+                follow_up_commands: [],
+            }),
+        }),
+    );
+    await page.route('**/api/enhance', (route) => {
+        enhanceRequests++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({ enhanced_image: null, explanation: '' }),
+        });
+    });
+
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    await svelteSelect(page, '#mode-select', 'generate');
+
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a flowchart');
+    await page.locator('#chat-send-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('Done.', { timeout: 10_000 });
+
+    // Wait a bit to ensure no enhance call fires
+    await page.waitForTimeout(2000);
+    expect(enhanceRequests).toBe(0);
+});
+
+
+// ── Preview tabs tests ──────────────────────────────────────────
+
+test('preview panel shows Mermaid and Enhanced tabs', async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    const mermaidTab = page.locator('.preview-tab').filter({ hasText: 'Mermaid' });
+    const enhancedTab = page.locator('.preview-tab').filter({ hasText: 'Enhanced' });
+
+    await expect(mermaidTab).toBeVisible();
+    await expect(enhancedTab).toBeVisible();
+    await expect(mermaidTab).toHaveClass(/active/);
+});
+
+test('Enhanced tab shows placeholder when no enhanced image exists', async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    // Click the Enhanced tab
+    await page.locator('.preview-tab').filter({ hasText: 'Enhanced' }).click();
+
+    await expect(page.locator('.enhance-placeholder')).toBeVisible();
+    await expect(page.locator('.enhance-placeholder')).toContainText('No enhanced image yet');
+});
+
+test('Enhance button shows popover with input and Go button', async ({ page }) => {
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    const enhanceBtn = page.locator('.enhance-btn');
+    await expect(enhanceBtn).toBeVisible();
+    await enhanceBtn.click();
+
+    await expect(page.locator('.enhance-popover')).toBeVisible();
+    await expect(page.locator('.enhance-popover input')).toBeVisible();
+    await expect(page.locator('.enhance-popover-go')).toBeVisible();
+});
+
+
+// ── Auto mode enhance flow ──────────────────────────────────────
+
+test('Auto mode calls /api/enhance after chat and shows Enhanced tab when image returned', async ({ page }) => {
+    let enhanceRequests = 0;
+
+    await page.route('**/api/chat', (route) =>
+        route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A[Hello] --> B[World]',
+                explanation: 'Here is a flowchart.',
+                follow_up_commands: [],
+            }),
+        }),
+    );
+    await page.route('**/api/enhance', (route) => {
+        enhanceRequests++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                enhanced_image: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+                explanation: 'Enhanced the diagram.',
+            }),
+        });
+    });
+
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a flowchart');
+    await page.locator('#chat-send-btn').click();
+
+    // Wait for the Enhanced tab to become active
+    const enhancedTab = page.locator('.preview-tab').filter({ hasText: 'Enhanced' });
+    await expect(enhancedTab).toHaveClass(/active/, { timeout: 15_000 });
+
+    // Verify the enhanced image is shown
+    await expect(page.locator('.enhanced-wrapper img')).toBeVisible({ timeout: 5_000 });
+
+    expect(enhanceRequests).toBeGreaterThanOrEqual(1);
+});
+
+test('Enhance Graph mode skips chat and calls enhance directly', async ({ page }) => {
+    let chatRequests = 0;
+    let enhanceRequests = 0;
+
+    await page.route('**/api/chat', (route) => {
+        chatRequests++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                mermaid_code: 'flowchart TD\n    A --> B',
+                explanation: 'Done.',
+                follow_up_commands: [],
+            }),
+        });
+    });
+    await page.route('**/api/enhance', (route) => {
+        enhanceRequests++;
+        return route.fulfill({
+            status: 200,
+            contentType: 'application/json',
+            body: JSON.stringify({
+                enhanced_image: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+                explanation: 'Enhanced.',
+            }),
+        });
+    });
+
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    // First generate a diagram in "generate" mode (no enhance) so getDiagramImage() has content
+    await svelteSelect(page, '#mode-select', 'generate');
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Draw a flowchart');
+    await page.locator('#chat-send-btn').click();
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('Done.', { timeout: 10_000 });
+    await expect(page.locator('.diagram-wrapper svg')).toBeVisible({ timeout: 10_000 });
+
+    // Reset counters — the chat call above was expected
+    chatRequests = 0;
+    enhanceRequests = 0;
+
+    // Switch to Enhance Graph mode and send an enhance-only request
+    await svelteSelect(page, '#mode-select', 'enhance');
+    await textarea.fill('Make it look better');
+    await page.locator('#chat-send-btn').click();
+
+    // Wait for the Enhanced tab to become active
+    const enhancedTab = page.locator('.preview-tab').filter({ hasText: 'Enhanced' });
+    await expect(enhancedTab).toHaveClass(/active/, { timeout: 15_000 });
+
+    // Enhance mode should NOT call /api/chat for the second request
+    expect(chatRequests).toBe(0);
+    expect(enhanceRequests).toBeGreaterThanOrEqual(1);
 });
 

@@ -1,18 +1,33 @@
 <script lang="ts">
   import mermaid from "mermaid";
   import { onMount, onDestroy } from "svelte";
+  import type { PreviewTab } from "$lib/chat.svelte";
 
   let {
     code,
     onRenderError,
     onFixRequest,
     isLoading = false,
+    activeTab = "mermaid",
+    enhancedImage = null,
+    isEnhancing = false,
+    onTabChange,
+    onEnhanceRequest,
   }: {
     code: string;
     onRenderError?: (code: string, error: string) => void;
     onFixRequest?: (code: string, error: string) => void;
     isLoading?: boolean;
+    activeTab?: PreviewTab;
+    enhancedImage?: string | null;
+    isEnhancing?: boolean;
+    onTabChange?: (tab: PreviewTab) => void;
+    onEnhanceRequest?: (instructions?: string) => void;
   } = $props();
+
+  let showEnhancePopover = $state(false);
+  let enhanceInstructions = $state("");
+  let enhancePopoverEl: HTMLDivElement;
 
   /**
    * Shared helper: renders the current diagram SVG to a JPEG base64 string.
@@ -83,6 +98,72 @@
 
   // ── Dark / Light preview mode ────────────────────────────────────
   let previewDark = $state(false);
+
+  // ── Enhanced image zoom/pan ──────────────────────────────────────
+  let enhancedContainerEl: HTMLDivElement;
+  let enhancedZoom = $state(1.0);
+  let enhancedPanX = $state(0);
+  let enhancedPanY = $state(0);
+  let isEnhancedPanning = $state(false);
+
+  const enhancedZoomPct = $derived(Math.round(enhancedZoom * 100));
+
+  function resetEnhancedView() {
+    enhancedZoom = 1.0;
+    enhancedPanX = 0;
+    enhancedPanY = 0;
+  }
+
+  function onEnhancedWheel(e: WheelEvent) {
+    e.preventDefault();
+    const rect = enhancedContainerEl.getBoundingClientRect();
+    const cx = e.clientX - rect.left;
+    const cy = e.clientY - rect.top;
+    const oldZoom = enhancedZoom;
+    const delta = e.deltaY < 0 ? ZOOM_STEP : -ZOOM_STEP;
+    const newZoom = Math.min(ZOOM_MAX, Math.max(ZOOM_MIN, enhancedZoom + delta));
+    const ratio = newZoom / oldZoom;
+    enhancedPanX = cx - ratio * (cx - enhancedPanX);
+    enhancedPanY = cy - ratio * (cy - enhancedPanY);
+    enhancedZoom = newZoom;
+  }
+
+  function onEnhancedPointerDown(e: PointerEvent) {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    enhancedContainerEl.setPointerCapture(e.pointerId);
+    isEnhancedPanning = true;
+    const startX = e.clientX - enhancedPanX;
+    const startY = e.clientY - enhancedPanY;
+    function onMove(ev: PointerEvent) {
+      enhancedPanX = ev.clientX - startX;
+      enhancedPanY = ev.clientY - startY;
+    }
+    function onUp(ev: PointerEvent) {
+      enhancedContainerEl.releasePointerCapture(ev.pointerId);
+      enhancedContainerEl.removeEventListener("pointermove", onMove);
+      enhancedContainerEl.removeEventListener("pointerup", onUp);
+      isEnhancedPanning = false;
+    }
+    enhancedContainerEl.addEventListener("pointermove", onMove);
+    enhancedContainerEl.addEventListener("pointerup", onUp);
+  }
+
+  // Render-complete signalling for the auto-enhance flow
+  let renderResolve: (() => void) | null = null;
+
+  export function waitForRender(): Promise<void> {
+    return new Promise((resolve) => {
+      renderResolve = resolve;
+      // Fallback: resolve after debounce + render time + buffer
+      setTimeout(() => {
+        if (renderResolve === resolve) {
+          renderResolve = null;
+          resolve();
+        }
+      }, 1500);
+    });
+  }
 
   // ── Download dropdown ─────────────────────────────────────────────
   let showDownloadMenu = $state(false);
@@ -186,6 +267,10 @@
         wrapperEl.innerHTML = svg;
         const svgEl = wrapperEl.querySelector("svg");
         if (svgEl) fixSvgClipping(svgEl);
+        if (renderResolve) {
+          renderResolve();
+          renderResolve = null;
+        }
       } catch (e: any) {
         const msg = e?.message ?? "Invalid Mermaid syntax";
         renderError = msg;
@@ -263,6 +348,15 @@
     URL.revokeObjectURL(a.href);
   }
 
+  function downloadEnhancedImage() {
+    if (!enhancedImage) return;
+    const byteString = atob(enhancedImage);
+    const ab = new Uint8Array(byteString.length);
+    for (let i = 0; i < byteString.length; i++) ab[i] = byteString.charCodeAt(i);
+    const blob = new Blob([ab], { type: "image/png" });
+    triggerDownload(blob, "enhanced-diagram.png");
+  }
+
   function handleClickOutside(e: MouseEvent) {
     if (
       showDownloadMenu &&
@@ -270,6 +364,13 @@
       !downloadBtnEl.contains(e.target as Node)
     ) {
       showDownloadMenu = false;
+    }
+    if (
+      showEnhancePopover &&
+      enhancePopoverEl &&
+      !enhancePopoverEl.contains(e.target as Node)
+    ) {
+      showEnhancePopover = false;
     }
   }
 
@@ -287,80 +388,126 @@
 
 <section class="panel preview-panel" class:preview-light={!previewDark}>
   <div class="panel-header">
-    <span class="panel-icon"></span>
-    <h2>Live Preview</h2>
-
-    <!-- Dark / Light toggle -->
-    <button
-      class="theme-toggle"
-      onclick={togglePreviewMode}
-      title={previewDark ? "Switch to light mode" : "Switch to dark mode"}
-      aria-label={previewDark ? "Switch to light mode" : "Switch to dark mode"}
-    >
-      <span class="theme-toggle-track" class:light={!previewDark}>
-        <span class="theme-toggle-icon">{previewDark ? "🌙" : "☀️"}</span>
-        <span class="theme-toggle-thumb" class:light={!previewDark}></span>
-      </span>
-    </button>
-
-    <!-- Download dropdown -->
-    <div class="download-wrapper" bind:this={downloadBtnEl}>
+    <div class="preview-tabs">
       <button
-        class="download-btn"
-        onclick={() => (showDownloadMenu = !showDownloadMenu)}
-        title="Download diagram"
-        aria-label="Download diagram"
-        disabled={!!renderError || !code.trim()}
+        class="preview-tab"
+        class:active={activeTab === "mermaid"}
+        onclick={() => onTabChange?.("mermaid")}
+      >Mermaid</button>
+      <button
+        class="preview-tab"
+        class:active={activeTab === "enhanced"}
+        onclick={() => onTabChange?.("enhanced")}
+      >Enhanced</button>
+    </div>
+
+    <!-- Enhance button with popover -->
+    <div class="enhance-wrapper" bind:this={enhancePopoverEl}>
+      <button
+        class="enhance-btn"
+        onclick={() => {
+          if (onEnhanceRequest) {
+            showEnhancePopover = !showEnhancePopover;
+          }
+        }}
+        disabled={isLoading || isEnhancing || !code.trim()}
+        title="Enhance diagram with AI"
       >
-        <svg
-          width="16"
-          height="16"
-          viewBox="0 0 24 24"
-          fill="none"
-          stroke="currentColor"
-          stroke-width="2"
-          stroke-linecap="round"
-          stroke-linejoin="round"
-        >
-          <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-          <polyline points="7 10 12 15 17 10" />
-          <line x1="12" y1="15" x2="12" y2="3" />
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2" />
         </svg>
+        Enhance
       </button>
-      {#if showDownloadMenu}
-        <div class="download-menu">
-          <button class="download-menu-item" onclick={downloadSVG}>
-            <span class="download-menu-label">
-              <strong>SVG</strong>
-            </span>
-          </button>
-          <button class="download-menu-item" onclick={downloadJPEG}>
-            <span class="download-menu-label">
-              <strong>JPEG</strong>
-            </span>
-          </button>
+      {#if showEnhancePopover}
+        <div class="enhance-popover">
+          <input
+            type="text"
+            bind:value={enhanceInstructions}
+            placeholder="Optional: describe improvements..."
+            onkeydown={(e) => {
+              if (e.key === "Enter") {
+                onEnhanceRequest?.(enhanceInstructions || undefined);
+                showEnhancePopover = false;
+                enhanceInstructions = "";
+              }
+            }}
+          />
+          <button
+            class="enhance-popover-go"
+            onclick={() => {
+              onEnhanceRequest?.(enhanceInstructions || undefined);
+              showEnhancePopover = false;
+              enhanceInstructions = "";
+            }}
+          >Go</button>
         </div>
       {/if}
     </div>
 
-    <div class="zoom-controls">
+    {#if activeTab === "mermaid"}
       <button
-        class="zoom-btn"
-        onclick={() => (zoom = Math.max(ZOOM_MIN, zoom - ZOOM_STEP * 2))}
-        title="Zoom out">−</button
+        class="theme-toggle"
+        onclick={togglePreviewMode}
+        title={previewDark ? "Switch to light mode" : "Switch to dark mode"}
+        aria-label={previewDark ? "Switch to light mode" : "Switch to dark mode"}
       >
-      <button class="zoom-reset" onclick={resetView} title="Reset view"
-        >{zoomPct}%</button
-      >
-      <button
-        class="zoom-btn"
-        onclick={() => (zoom = Math.min(ZOOM_MAX, zoom + ZOOM_STEP * 2))}
-        title="Zoom in">+</button
-      >
-    </div>
+        <span class="theme-toggle-track" class:light={!previewDark}>
+          <span class="theme-toggle-icon">{previewDark ? "🌙" : "☀️"}</span>
+          <span class="theme-toggle-thumb" class:light={!previewDark}></span>
+        </span>
+      </button>
 
-    {#if renderError}
-      <span class="error-badge">Syntax error</span>
+      <div class="download-wrapper" bind:this={downloadBtnEl}>
+        <button
+          class="download-btn"
+          onclick={() => (showDownloadMenu = !showDownloadMenu)}
+          title="Download diagram"
+          aria-label="Download diagram"
+          disabled={!!renderError || !code.trim()}
+        >
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+        {#if showDownloadMenu}
+          <div class="download-menu">
+            <button class="download-menu-item" onclick={downloadSVG}>
+              <span class="download-menu-label"><strong>SVG</strong></span>
+            </button>
+            <button class="download-menu-item" onclick={downloadJPEG}>
+              <span class="download-menu-label"><strong>JPEG</strong></span>
+            </button>
+          </div>
+        {/if}
+      </div>
+
+      <div class="zoom-controls">
+        <button class="zoom-btn" onclick={() => (zoom = Math.max(ZOOM_MIN, zoom - ZOOM_STEP * 2))} title="Zoom out">−</button>
+        <button class="zoom-reset" onclick={resetView} title="Reset view">{zoomPct}%</button>
+        <button class="zoom-btn" onclick={() => (zoom = Math.min(ZOOM_MAX, zoom + ZOOM_STEP * 2))} title="Zoom in">+</button>
+      </div>
+
+      {#if renderError}
+        <span class="error-badge">Syntax error</span>
+      {/if}
+    {:else}
+      {#if enhancedImage}
+        <button class="download-btn" onclick={downloadEnhancedImage} title="Download enhanced image">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+            <polyline points="7 10 12 15 17 10" />
+            <line x1="12" y1="15" x2="12" y2="3" />
+          </svg>
+        </button>
+
+        <div class="zoom-controls">
+          <button class="zoom-btn" onclick={() => (enhancedZoom = Math.max(ZOOM_MIN, enhancedZoom - ZOOM_STEP * 2))} title="Zoom out">−</button>
+          <button class="zoom-reset" onclick={resetEnhancedView} title="Reset view">{enhancedZoomPct}%</button>
+          <button class="zoom-btn" onclick={() => (enhancedZoom = Math.min(ZOOM_MAX, enhancedZoom + ZOOM_STEP * 2))} title="Zoom in">+</button>
+        </div>
+      {/if}
     {/if}
   </div>
 
@@ -373,6 +520,7 @@
     onpointerdown={onPointerDown}
     role="img"
     aria-label="Mermaid diagram preview — scroll to zoom, drag to pan"
+    style:display={activeTab === "mermaid" ? "block" : "none"}
   >
     {#if renderError}
       <!-- svelte-ignore a11y_no_static_element_interactions -->
@@ -386,7 +534,7 @@
             onclick={() => onFixRequest(code, renderError)}
             disabled={isLoading}
           >
-            {isLoading ? "Fixing…" : "✨ Fix with AI"}
+            {isLoading ? "Fixing…" : "Fix with AI"}
           </button>
         {/if}
       </div>
@@ -397,5 +545,36 @@
       bind:this={wrapperEl}
       style="transform: translate({panX}px, {panY}px) scale({zoom}); transform-origin: 0 0;"
     ></div>
+  </div>
+
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="preview-container enhanced-container"
+    class:panning={isEnhancedPanning}
+    bind:this={enhancedContainerEl}
+    onwheel={onEnhancedWheel}
+    onpointerdown={onEnhancedPointerDown}
+    role="img"
+    aria-label="Enhanced diagram preview — scroll to zoom, drag to pan"
+    style:display={activeTab === "enhanced" ? "flex" : "none"}
+  >
+    {#if isEnhancing}
+      <div class="enhance-loading">
+        <div class="enhance-spinner"></div>
+        <p>Enhancing diagram...</p>
+      </div>
+    {:else if enhancedImage}
+      <div
+        class="enhanced-wrapper"
+        style="transform: translate({enhancedPanX}px, {enhancedPanY}px) scale({enhancedZoom}); transform-origin: 0 0;"
+      >
+        <img src="data:image/png;base64,{enhancedImage}" alt="AI-enhanced diagram" />
+      </div>
+    {:else}
+      <div class="enhance-placeholder">
+        <p>No enhanced image yet.</p>
+        <p class="enhance-placeholder-hint">Click <strong>Enhance</strong> or use <strong>Auto</strong> mode to generate one.</p>
+      </div>
+    {/if}
   </div>
 </section>

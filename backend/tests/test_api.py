@@ -158,6 +158,119 @@ class TestFixEndpoint:
         assert resp.status_code == 422
 
 
+# ── POST /api/enhance ─────────────────────────────────────────────
+
+MOCK_ENHANCE = {
+    "enhanced_image": "iVBORw0KGgoAAAANSUhEUg==",
+    "explanation": "Improved the layout.",
+}
+
+MOCK_ENHANCE_SKIP = {
+    "enhanced_image": None,
+    "explanation": "Diagram looks good, no enhancement needed.",
+}
+
+
+class TestEnhanceEndpoint:
+    @patch("app.main.enhance_image", new_callable=AsyncMock, return_value=MOCK_ENHANCE)
+    def test_valid_enhance_returns_200(self, mock_ai, client):
+        resp = client.post(
+            "/api/enhance",
+            json={
+                "image": "iVBORw0KGgoAAAANSUhEUg==",
+                "message": "Make the layout cleaner",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["enhanced_image"] is not None
+        assert data["explanation"] == "Improved the layout."
+
+    @patch("app.main.enhance_image", new_callable=AsyncMock, return_value=MOCK_ENHANCE_SKIP)
+    def test_enhance_returns_null_when_no_enhancement_needed(self, mock_ai, client):
+        resp = client.post(
+            "/api/enhance",
+            json={
+                "image": "iVBORw0KGgoAAAANSUhEUg==",
+                "message": "Draw a flowchart",
+            },
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["enhanced_image"] is None
+        assert "no enhancement" in data["explanation"].lower()
+
+    @patch("app.main.enhance_image", new_callable=AsyncMock, return_value=MOCK_ENHANCE)
+    def test_enhance_with_custom_instructions(self, mock_ai, client):
+        resp = client.post(
+            "/api/enhance",
+            json={
+                "image": "iVBORw0KGgoAAAANSUhEUg==",
+                "message": "",
+                "instructions": "Fix overlapping nodes",
+            },
+        )
+        assert resp.status_code == 200
+        call_args = mock_ai.call_args
+        assert call_args.kwargs["instructions"] == "Fix overlapping nodes"
+
+    @patch("app.main.enhance_image", new_callable=AsyncMock, side_effect=Exception("LLM error"))
+    def test_enhance_internal_error_returns_500(self, mock_ai, client):
+        resp = client.post(
+            "/api/enhance",
+            json={"image": "iVBORw0KGgoAAAANSUhEUg=="},
+        )
+        assert resp.status_code == 500
+
+    def test_enhance_missing_image_returns_422(self, client):
+        resp = client.post("/api/enhance", json={"message": "enhance"})
+        assert resp.status_code == 422
+
+
+# ── POST /api/chat with mode and chart_type ──────────────────────
+
+
+class TestChatModeAndChartType:
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    def test_chat_with_mode_and_chart_type(self, mock_ai, client):
+        resp = client.post(
+            "/api/chat",
+            json={
+                "message": "Draw a sequence diagram",
+                "mode": "generate",
+                "chart_type": "sequenceDiagram",
+            },
+        )
+        assert resp.status_code == 200
+        call_args = mock_ai.call_args
+        assert call_args.kwargs["chart_type"] == "sequenceDiagram"
+
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    def test_chat_defaults_to_auto_mode(self, mock_ai, client):
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Draw something"},
+        )
+        assert resp.status_code == 200
+
+    def test_chat_invalid_mode_returns_422(self, client):
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Draw", "mode": "invalid_mode"},
+        )
+        assert resp.status_code == 422
+
+    @patch("app.main.generate_mermaid", new_callable=AsyncMock, return_value=MOCK_LLM)
+    def test_chat_null_chart_type_passed_through(self, mock_ai, client):
+        resp = client.post(
+            "/api/chat",
+            json={"message": "Draw", "chart_type": None},
+        )
+        assert resp.status_code == 200
+        call_args = mock_ai.call_args
+        assert call_args.kwargs["chart_type"] is None
+
+
 # ── GET /health ─────────────────────────────────────────────────
 
 

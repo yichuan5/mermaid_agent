@@ -1,16 +1,22 @@
 <script lang="ts">
+  import { onMount } from "svelte";
   import ChatPanel from "$lib/ChatPanel.svelte";
   import Editor from "$lib/Editor.svelte";
   import Preview from "$lib/Preview.svelte";
   import { createChatStore } from "$lib/chat.svelte";
 
   const chat = createChatStore();
+  let hydrated = $state(false);
+  onMount(() => { hydrated = true; });
 
-  // ── Diagram image capture ──────────────────────────────────────
+  // ── Diagram image capture & render waiting ─────────────────────
   let previewComponent: ReturnType<typeof Preview>;
   $effect(() => {
     chat.getDiagramImage = previewComponent
       ? () => previewComponent.getDiagramImageForAI()
+      : null;
+    chat.waitForRender = previewComponent
+      ? () => previewComponent.waitForRender()
       : null;
   });
 
@@ -63,7 +69,7 @@
   />
 </svelte:head>
 
-<div class="app-shell" class:dragging={isDragging}>
+<div class="app-shell" class:dragging={isDragging} data-hydrated={hydrated || undefined}>
   <header class="app-header">
     <div class="logo">
       <span class="logo-icon">◈</span>
@@ -82,6 +88,10 @@
       isLoading={chat.isLoading}
       onSubmit={chat.handleUserSubmit}
       onImageUpload={chat.handleImageUpload}
+      mode={chat.mode}
+      chartType={chat.chartType}
+      onModeChange={(m) => (chat.mode = m)}
+      onChartTypeChange={(ct) => (chat.chartType = ct)}
     />
 
     <div
@@ -108,6 +118,11 @@
       onRenderError={chat.handleRenderError}
       onFixRequest={chat.handleFixRequest}
       isLoading={chat.isLoading}
+      activeTab={chat.activePreviewTab}
+      enhancedImage={chat.enhancedImage}
+      isEnhancing={chat.isEnhancing}
+      onTabChange={(tab) => (chat.activePreviewTab = tab)}
+      onEnhanceRequest={(instructions) => chat.handleManualEnhance(instructions)}
     />
   </main>
 </div>

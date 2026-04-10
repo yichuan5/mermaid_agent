@@ -1,18 +1,54 @@
 <script lang="ts">
   import { tick } from "svelte";
   import type { Message } from "$lib/types";
+  import type { Mode } from "$lib/chat.svelte";
 
   let {
     messages,
     isLoading,
     onSubmit,
     onImageUpload,
+    mode,
+    chartType,
+    onModeChange,
+    onChartTypeChange,
   }: {
     messages: Message[];
     isLoading: boolean;
     onSubmit: (text: string) => void;
     onImageUpload: (file: File, message: string) => void;
+    mode: Mode;
+    chartType: string | null;
+    onModeChange: (mode: Mode) => void;
+    onChartTypeChange: (chartType: string | null) => void;
   } = $props();
+
+  const CHART_TYPES = [
+    { value: null, label: "Auto" },
+    { value: "flowchart", label: "Flowchart" },
+    { value: "sequenceDiagram", label: "Sequence Diagram" },
+    { value: "classDiagram", label: "Class Diagram" },
+    { value: "stateDiagram", label: "State Diagram" },
+    { value: "entityRelationshipDiagram", label: "ER Diagram" },
+    { value: "gantt", label: "Gantt" },
+    { value: "mindmap", label: "Mindmap" },
+    { value: "timeline", label: "Timeline" },
+    { value: "pie", label: "Pie Chart" },
+    { value: "gitgraph", label: "Git Graph" },
+    { value: "quadrantChart", label: "Quadrant Chart" },
+    { value: "sankey", label: "Sankey" },
+    { value: "block", label: "Block" },
+    { value: "kanban", label: "Kanban" },
+    { value: "architecture", label: "Architecture" },
+    { value: "xyChart", label: "XY Chart" },
+    { value: "radar", label: "Radar" },
+    { value: "userJourney", label: "User Journey" },
+    { value: "c4", label: "C4" },
+    { value: "requirementDiagram", label: "Requirement" },
+    { value: "zenuml", label: "ZenUML" },
+    { value: "treemap", label: "Treemap" },
+    { value: "packet", label: "Packet" },
+  ];
 
   let inputText = $state("");
   let messagesEl: HTMLDivElement;
@@ -159,6 +195,40 @@
       sendMessage();
     }}
   >
+    <div class="chat-toolbar">
+      <div class="toolbar-select">
+        <label for="mode-select">Mode</label>
+        <select
+          id="mode-select"
+          value={mode}
+          onchange={(e) => onModeChange(e.currentTarget.value as Mode)}
+          disabled={isLoading}
+        >
+          <option value="auto">Auto</option>
+          <option value="generate">Generate Code</option>
+          <option value="enhance">Enhance Graph</option>
+        </select>
+      </div>
+      {#if mode !== "enhance"}
+        <div class="toolbar-select">
+          <label for="chart-select">Chart</label>
+          <select
+            id="chart-select"
+            value={chartType ?? ""}
+            onchange={(e) => {
+              const v = e.currentTarget.value;
+              onChartTypeChange(v === "" ? null : v);
+            }}
+            disabled={isLoading}
+          >
+            {#each CHART_TYPES as ct}
+              <option value={ct.value ?? ""}>{ct.label}</option>
+            {/each}
+          </select>
+        </div>
+      {/if}
+    </div>
+
     {#if imagePreviewUrl}
       <div class="image-preview">
         <img src={imagePreviewUrl} alt="Preview" />

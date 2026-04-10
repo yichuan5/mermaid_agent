@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+import base64
 from pathlib import Path
 from dotenv import load_dotenv
 from typing import Literal
@@ -16,8 +17,9 @@ from pydantic_ai.messages import (
     TextPart,
     BinaryContent,
 )
+from google.genai import types as genai_types
 from app.schema import ChatResponse, FixResponse, HistoryMessage, FixAttempt
-from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT, FIX_PROMPT
+from .prompts import SYSTEM_PROMPT, IMAGE_TO_MERMAID_PROMPT, FIX_PROMPT, ENHANCE_PROMPT
 
 logger = logging.getLogger(__name__)
 logging.basicConfig(
@@ -28,7 +30,7 @@ logging.basicConfig(
 # Always load .env from the backend/ directory, regardless of cwd
 load_dotenv(Path(__file__).parent.parent.parent / ".env")
 
-MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+MODEL = os.getenv("GEMINI_MODEL", "gemini-3-flash-preview")
 API_KEY = os.getenv("GEMINI_API_KEY")
 
 logger.info("Using model: %s", MODEL)
@@ -36,6 +38,8 @@ logger.info("API key loaded: %s", "yes" if API_KEY else "NO - check .env!")
 
 provider = GoogleProvider(api_key=API_KEY)
 llm = GoogleModel(model_name=MODEL, provider=provider)
+
+ENHANCE_MODEL = os.getenv("GEMINI_ENHANCE_MODEL", "gemini-3.1-flash-image-preview")
 
 DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid" / "syntax"
 
@@ -167,6 +171,7 @@ async def generate_mermaid(
     current_mermaid_code: str | None = None,
     current_image: str | None = None,
     history: list[HistoryMessage] | None = None,
+    chart_type: str | None = None,
 ) -> dict:
     """
     Agentic loop: the LLM can fetch documentation and then generate a diagram.
@@ -182,6 +187,8 @@ async def generate_mermaid(
                 messages.append(ModelResponse(parts=[TextPart(content=h.content)]))
 
     user_prompt = ""
+    if chart_type:
+        user_prompt += f"Use the following diagram type: {chart_type}\n\n"
     if current_mermaid_code:
         user_prompt += f"Here is the current diagram code:\n\n```mermaid\n{current_mermaid_code}\n```\n\n"
         if current_image:
@@ -331,3 +338,63 @@ async def image_to_mermaid(
         raise
 
     return result.output.model_dump()
+
+
+async def enhance_image(
+    image_base64: str,
+    message: str = "",
+    instructions: str | None = None,
+) -> dict:
+    """
+    Evaluate a rendered Mermaid diagram and optionally enhance it using
+    Gemini's image generation capabilities via the shared GoogleProvider client.
+    """
+    prompt = ENHANCE_PROMPT + "\n\n"
+    if message:
+        prompt += f"Original user request: {message}\n\n"
+    if instructions:
+        prompt += f"Specific enhancement instructions: {instructions}\n\n"
+    prompt += "Here is the rendered diagram to evaluate and potentially enhance:"
+
+    image_bytes = base64.b64decode(image_base64)
+    image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
+
+    logger.info(
+        "enhance_image: calling Gemini (model=%s, has_instructions=%s)",
+        ENHANCE_MODEL,
+        instructions is not None,
+    )
+
+    try:
+        client = provider.client
+        response = await client.aio.models.generate_content(
+            model=ENHANCE_MODEL,
+            contents=[prompt, image_part],
+            config=genai_types.GenerateContentConfig(
+                response_modalities=["TEXT", "IMAGE"],
+            ),
+        )
+    except Exception:
+        logger.exception("enhance_image: Gemini call failed (model=%s)", ENHANCE_MODEL)
+        raise
+
+    enhanced_image_b64 = None
+    explanation = ""
+
+    if response.candidates:
+        for part in response.candidates[0].content.parts:
+            if part.inline_data and part.inline_data.mime_type.startswith("image/"):
+                enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode("utf-8")
+            elif part.text:
+                explanation += part.text
+
+    if not explanation:
+        explanation = "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."
+
+    logger.info(
+        "enhance_image: done (enhanced=%s, explanation_len=%d)",
+        enhanced_image_b64 is not None,
+        len(explanation),
+    )
+
+    return {"enhanced_image": enhanced_image_b64, "explanation": explanation}
