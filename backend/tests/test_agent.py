@@ -233,3 +233,49 @@ class TestAgentDeps:
             )
 
         assert len(deps.pending_tools) == 0
+
+
+# ── create_mermaid_diagram guard ──────────────────────────────────
+
+
+class DummyRunContext:
+    def __init__(self, deps: AgentDeps):
+        self.deps = deps
+
+
+class TestCreateMermaidDiagramGuard:
+    @pytest.mark.asyncio
+    async def test_blocks_second_successful_render_same_turn(self):
+        from app.services.agent import create_mermaid_diagram
+
+        ws = AsyncMock()
+        deps = AgentDeps(ws=ws)
+        ctx = DummyRunContext(deps)
+
+        deps.request_client_tool = AsyncMock(return_value={"success": True})
+
+        first = await create_mermaid_diagram(ctx, "flowchart TD\nA-->B")
+        second = await create_mermaid_diagram(ctx, "flowchart TD\nA-->C")
+
+        assert "Diagram rendered successfully" in first
+        assert "already rendered successfully for this request" in second
+        assert deps.request_client_tool.await_count == 1
+
+    @pytest.mark.asyncio
+    async def test_allows_retry_after_render_error(self):
+        from app.services.agent import create_mermaid_diagram
+
+        ws = AsyncMock()
+        deps = AgentDeps(ws=ws)
+        ctx = DummyRunContext(deps)
+
+        deps.request_client_tool = AsyncMock(
+            side_effect=[{"error": "Parse error"}, {"success": True}]
+        )
+
+        first = await create_mermaid_diagram(ctx, "bad code")
+        second = await create_mermaid_diagram(ctx, "fixed code")
+
+        assert first == "Render error: Parse error"
+        assert "Diagram rendered successfully" in second
+        assert deps.request_client_tool.await_count == 2

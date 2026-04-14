@@ -282,6 +282,8 @@ class AgentDeps:
 
     ws: WebSocket
     pending_tools: dict[str, asyncio.Future] = field(default_factory=dict)
+    render_calls: int = 0
+    last_render_had_error: bool = False
 
     async def request_client_tool(self, name: str, args: dict) -> dict:
         """Send a tool request to the frontend and await the result."""
@@ -348,14 +350,24 @@ async def create_mermaid_diagram(
 
     Only call this tool once per user request unless you get an error back.
     """
-    await ctx.deps.ws.send_json(
-        {"type": "status", "message": "Rendering diagram…"}
-    )
+    if ctx.deps.render_calls >= 1 and not ctx.deps.last_render_had_error:
+        logger.warning(
+            "create_mermaid_diagram: blocked repeated render after successful render"
+        )
+        return (
+            "Diagram already rendered successfully for this request. "
+            "Do not call `create_mermaid_diagram` again; continue with explanation only."
+        )
+
+    await ctx.deps.ws.send_json({"type": "status", "message": "Rendering diagram…"})
+    ctx.deps.render_calls += 1
     result = await ctx.deps.request_client_tool(
         "render_and_capture", {"mermaid_code": mermaid_code}
     )
     if "error" in result:
+        ctx.deps.last_render_had_error = True
         return f"Render error: {result['error']}"
+    ctx.deps.last_render_had_error = False
     return "Diagram rendered successfully and is now visible to the user."
 
 
