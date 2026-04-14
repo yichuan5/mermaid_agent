@@ -21,6 +21,7 @@ class WsUserMessage(BaseModel):
     current_mermaid_code: str | None = None
     history: list[dict] = Field(default_factory=list)
     chart_type: str | None = None
+    force_enhance: bool = False
 
 
 class WsImageUpload(BaseModel):

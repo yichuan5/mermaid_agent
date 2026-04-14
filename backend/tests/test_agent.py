@@ -13,8 +13,7 @@ from app.services.agent import (
     _resolve_schema_refs,
     _parse_follow_ups,
     _load_config_schema,
-    _is_visual_enhancement_request,
-    _build_tool_routing_hint,
+    _build_force_enhance_routing_hint,
     AgentDeps,
 )
 
@@ -106,38 +105,17 @@ class TestParseFollowUps:
         assert follow_ups == ["Suggestion one", "Suggestion two"]
 
 
-# ── visual enhancement routing helpers ────────────────────────────
+# ── explicit enhancement routing helper ────────────────────────────
 
 
-class TestVisualEnhancementRouting:
-    def test_clean_up_request_is_visual_enhancement(self):
-        assert _is_visual_enhancement_request("clean up this diagram")
-
-    def test_alignment_and_layout_request_is_visual_enhancement(self):
-        msg = "no revert the changes, just make the boxes more aligned, and better layout"
-        assert _is_visual_enhancement_request(msg)
-
-    def test_semantic_change_request_is_not_visual_only(self):
-        msg = "clean up this diagram and add two more nodes for OCR and embeddings"
-        assert not _is_visual_enhancement_request(msg)
-
-    def test_build_routing_hint_for_visual_request_with_existing_code(self):
-        hint = _build_tool_routing_hint(
-            "clean up this diagram",
-            "flowchart TD\nA-->B",
-        )
+class TestForceEnhancementRouting:
+    def test_build_routing_hint_for_force_enhance_request(self):
+        hint = _build_force_enhance_routing_hint(True)
         assert "MUST call `enhance_diagram` exactly once" in hint
         assert "Do NOT call `create_mermaid_diagram`" in hint
 
-    def test_build_routing_hint_empty_when_no_existing_diagram(self):
-        hint = _build_tool_routing_hint("clean up this diagram", None)
-        assert hint == ""
-
-    def test_build_routing_hint_empty_for_semantic_change(self):
-        hint = _build_tool_routing_hint(
-            "clean up this diagram and add a cache node",
-            "flowchart TD\nA-->B",
-        )
+    def test_build_routing_hint_empty_when_not_forced(self):
+        hint = _build_force_enhance_routing_hint(False)
         assert hint == ""
 
 

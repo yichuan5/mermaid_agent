@@ -306,6 +306,41 @@ test('chart_type is included in WebSocket payload', async ({ page }) => {
     expect(wsPayloads[0].chart_type).toBe('sequenceDiagram');
 });
 
+test('force enhance button sends force_enhance=true in WebSocket payload', async ({ page }) => {
+    const wsPayloads: any[] = [];
+
+    await mockWebSocket(page, (msg, ws) => {
+        if (msg.type === 'user_message') {
+            wsPayloads.push(msg);
+            ws.send(JSON.stringify({
+                type: 'enhanced_image',
+                image: 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8/5+hHgAHggJ/PchI7wAAAABJRU5ErkJggg==',
+            }));
+            ws.send(JSON.stringify({
+                type: 'message',
+                content: 'Enhanced with force mode.',
+                follow_up_commands: [],
+            }));
+            ws.send(JSON.stringify({ type: 'done' }));
+        }
+    });
+
+    await blockExternalRequests(page);
+    await page.goto('/');
+    await waitForHydration(page);
+
+    const textarea = page.locator('.chat-panel textarea');
+    await textarea.fill('Make boxes aligned and improve layout');
+    await page.locator('#force-enhance-btn').click();
+
+    await expect(
+        page.locator('.message.assistant .message-bubble').nth(1),
+    ).toContainText('Enhanced with force mode.', { timeout: 10_000 });
+
+    expect(wsPayloads.length).toBe(1);
+    expect(wsPayloads[0].force_enhance).toBe(true);
+});
+
 test('preview panel shows Mermaid and AI Enhanced tabs', async ({ page }) => {
     await blockExternalRequests(page);
     await page.goto('/');

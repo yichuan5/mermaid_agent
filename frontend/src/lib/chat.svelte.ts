@@ -209,6 +209,14 @@ export function createChatStore() {
   }
 
   async function sendChatRequest(userMessage: string, contextDiagram: string | null) {
+    await sendChatRequestWithOptions(userMessage, contextDiagram, false);
+  }
+
+  async function sendChatRequestWithOptions(
+    userMessage: string,
+    contextDiagram: string | null,
+    forceEnhance: boolean,
+  ) {
     isLoading = true;
 
     const history = buildHistory(messages, { skip: "both" });
@@ -223,6 +231,7 @@ export function createChatStore() {
       current_mermaid_code: contextDiagram,
       history,
       chart_type: chartType,
+      force_enhance: forceEnhance,
     };
 
     const callbacks = makeWsCallbacks(userMessage);
@@ -249,6 +258,16 @@ export function createChatStore() {
     messages.push({ role: "user", content: text });
     scheduleSave();
     sendChatRequest(text, diagramCode);
+  }
+
+  function handleForceEnhance(text: string) {
+    const message =
+      text.trim() ||
+      "Enhance this diagram's layout, alignment, spacing, and overall readability.";
+    clearFollowUps();
+    messages.push({ role: "user", content: message });
+    scheduleSave();
+    sendChatRequestWithOptions(message, diagramCode, true);
   }
 
   async function handleImageUpload(file: File, userMessage: string) {
@@ -341,6 +360,7 @@ export function createChatStore() {
     set getDiagramImage(fn: (() => Promise<string | null>) | null) { getDiagramImage = fn; },
     set renderMermaidCode(fn: ((code: string) => Promise<{ error?: string }>) | null) { renderMermaidCode = fn; },
     handleUserSubmit,
+    handleForceEnhance,
     handleImageUpload,
     handleCodeChange,
     handleFixRequest,

@@ -29,6 +29,7 @@ export interface UserMessagePayload {
     current_mermaid_code: string | null;
     history: { role: string; content: string }[];
     chart_type?: string | null;
+    force_enhance?: boolean;
 }
 
 export interface ImageUploadPayload {

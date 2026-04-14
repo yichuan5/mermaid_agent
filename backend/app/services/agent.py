@@ -3,7 +3,6 @@ import json
 import logging
 import base64
 import asyncio
-import re
 from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -198,103 +197,14 @@ def _parse_follow_ups(text: str) -> tuple[str, list[str]]:
     return explanation, follow_ups
 
 
-_VISUAL_ENHANCEMENT_PHRASES = (
-    "clean up",
-    "cleanup",
-    "polish",
-    "make it look professional",
-    "look professional",
-    "better layout",
-    "improve layout",
-    "fix layout",
-    "layout",
-    "align",
-    "aligned",
-    "spacing",
-    "readability",
-    "more readable",
-    "less crowded",
-    "de-clutter",
-    "declutter",
-    "overlap",
-    "overlapping",
-    "visually improve",
-    "visual improvement",
-    "make it prettier",
-    "beautify",
-)
-
-_SEMANTIC_CHANGE_VERBS = (
-    "add",
-    "remove",
-    "delete",
-    "insert",
-    "include",
-    "exclude",
-    "rename",
-    "replace",
-    "convert",
-    "switch",
-    "revert",
-    "undo",
-)
-
-_SEMANTIC_CHANGE_OBJECTS = (
-    "node",
-    "nodes",
-    "label",
-    "labels",
-    "text",
-    "connection",
-    "connections",
-    "arrow",
-    "arrows",
-    "step",
-    "steps",
-    "service",
-    "services",
-    "component",
-    "components",
-    "database",
-    "databases",
-    "chart type",
-    "flowchart",
-    "sequencediagram",
-    "state diagram",
-    "class diagram",
-    "gantt",
-    "mindmap",
-    "pie chart",
-)
-
-
-def _is_visual_enhancement_request(user_message: str) -> bool:
-    """Heuristic router: detect requests that are visual-only refinements."""
-    message = user_message.strip().lower()
-    if not message:
-        return False
-
-    has_visual_phrase = any(phrase in message for phrase in _VISUAL_ENHANCEMENT_PHRASES)
-    if not has_visual_phrase:
-        return False
-
-    normalized_for_semantics = re.sub(r"\bno\s+revert\b", "", message)
-    has_semantic_verb = any(
-        re.search(rf"\b{re.escape(verb)}\b", normalized_for_semantics)
-        for verb in _SEMANTIC_CHANGE_VERBS
-    )
-    has_semantic_object = any(obj in normalized_for_semantics for obj in _SEMANTIC_CHANGE_OBJECTS)
-
-    return not (has_semantic_verb and has_semantic_object)
-
-
-def _build_tool_routing_hint(user_message: str, current_mermaid_code: str | None) -> str:
-    """Build deterministic tool-routing guidance for tricky visual-only requests."""
-    if current_mermaid_code and _is_visual_enhancement_request(user_message):
+def _build_force_enhance_routing_hint(force_enhance: bool) -> str:
+    """Build explicit tool-routing guidance when user forces enhancement."""
+    if force_enhance:
         return (
-            "Routing directive for this turn: the user asked for visual/layout polish only. "
+            "Routing directive for this turn: the user explicitly chose Force AI Enhance. "
             "You MUST call `enhance_diagram` exactly once with the user's request as instructions. "
-            "Do NOT call `create_mermaid_diagram` unless the enhancement tool reports a hard failure."
+            "Do NOT call `create_mermaid_diagram` unless enhancement fails because no diagram is "
+            "available or the enhancement tool reports a hard failure."
         )
     return ""
 
@@ -513,7 +423,8 @@ async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
         user_message = data.get("message", "")
         chart_type = data.get("chart_type")
         current_mermaid_code = data.get("current_mermaid_code")
-        routing_hint = _build_tool_routing_hint(user_message, current_mermaid_code)
+        force_enhance = bool(data.get("force_enhance", False))
+        routing_hint = _build_force_enhance_routing_hint(force_enhance)
 
         user_prompt = ""
         if chart_type:

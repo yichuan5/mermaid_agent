@@ -88,6 +88,7 @@
       isLoading={chat.isLoading}
       statusMessage={chat.statusMessage}
       onSubmit={chat.handleUserSubmit}
+      onForceEnhance={chat.handleForceEnhance}
       onStop={chat.stopAgent}
       onImageUpload={chat.handleImageUpload}
       onClearHistory={chat.clearHistory}

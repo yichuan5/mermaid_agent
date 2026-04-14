@@ -8,6 +8,7 @@
     isLoading,
     statusMessage = null,
     onSubmit,
+    onForceEnhance,
     onStop,
     onImageUpload,
     onClearHistory,
@@ -18,6 +19,7 @@
     isLoading: boolean;
     statusMessage?: string | null;
     onSubmit: (text: string) => void;
+    onForceEnhance: (text: string) => void;
     onStop: () => void;
     onImageUpload: (file: File, message: string) => void;
     onClearHistory?: () => void;
@@ -229,6 +231,16 @@
           {/each}
         </select>
       </div>
+      <button
+        type="button"
+        id="force-enhance-btn"
+        class="force-enhance-btn"
+        title="Send this prompt as an explicit AI enhancement request"
+        onclick={() => onForceEnhance(inputText)}
+        disabled={isLoading}
+      >
+        Force AI Enhance
+      </button>
     </div>
 
     {#if imagePreviewUrl}
