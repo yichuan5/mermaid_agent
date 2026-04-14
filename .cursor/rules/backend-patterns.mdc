@@ -15,22 +15,25 @@ alwaysApply: false
 
 ## Agent architecture
 
-- **Unified agent** (`unified_agent`) is the primary agent used over WebSocket. It has 4 tools:
+- **Unified agent** (`unified_agent`) is the only agent, used over WebSocket. It uses `output_type=str` with 4 tools:
   - `read_mermaid_syntax` / `read_mermaid_config` — server-side, fetch Mermaid docs
-  - `render_and_capture` — client-side (via WS tool_request), renders code in browser and captures screenshot
-  - `enhance_diagram` — server-side, calls Gemini image gen after capturing a screenshot via client tool
+  - `create_mermaid_diagram` — sends `render_and_capture` tool_request to the client, renders code in browser and captures screenshot
+  - `enhance_diagram` — server-side, calls Gemini image gen after capturing a screenshot via `capture_screenshot` client tool
+- **Streaming**: The agent is called with `event_stream_handler=_stream_text_handler`, which forwards `TextPartDelta` events as `text_delta` WS messages in real time. The final text output is post-processed by `_parse_follow_ups()` to extract `>> ` prefixed follow-up suggestions.
 - **AgentDeps** is injected via `RunContext[AgentDeps]`. It holds the `WebSocket` and manages pending tool futures with `request_client_tool()` / `resolve_tool()`.
-- **Legacy agents** (`mermaid_agent`, `fix_agent`, `convert_agent`) are kept for REST backward compat
 - Image generation (`_enhance_image_impl`) reuses `GoogleProvider.client` directly — pydantic-ai doesn't support image output
-- All agents share one `GoogleProvider` instance initialized at module level
-- Tool logic is extracted into `_impl` helper functions shared by both unified and legacy agents
+- All shared logic is in `_impl` helper functions (e.g. `_read_mermaid_syntax_impl`, `_read_mermaid_config_impl`, `_enhance_image_impl`)
+- Config schema is cached in memory via `_load_config_schema()` (parsed once on first access)
+- One `GoogleProvider` instance is initialized at module level and shared
 
 ## WebSocket protocol
 
-Server → Client: `status`, `tool_request`, `enhanced_image`, `message`, `error`, `done`
-Client → Server: `user_message`, `image_upload`, `tool_result`
+Server → Client: `status`, `text_delta`, `tool_request`, `enhanced_image`, `message`, `error`, `done`
+Client → Server: `user_message`, `image_upload`, `tool_result`, `stop`
 
-The `_listen_for_tool_results` task runs concurrently with the agent loop, resolving `asyncio.Future`s as client tool responses arrive.
+Incoming `user_message` and `image_upload` are validated against `WsUserMessage` / `WsImageUpload` Pydantic models before reaching the agent.
+
+The `_listen_for_tool_results` task runs concurrently with the agent loop, resolving `asyncio.Future`s as client tool responses arrive and handling `stop` requests by cancelling the agent task.
 
 ## Deployment
 
@@ -43,19 +46,16 @@ The `_listen_for_tool_results` task runs concurrently with the agent loop, resol
 ## Testing
 
 ```python
-# Mock pattern for REST endpoints:
-@patch("app.main.generate_mermaid", new_callable=AsyncMock)
-def test_chat(self, mock_gen, client):
-    mock_gen.return_value = {"mermaid_code": "...", "explanation": "..."}
-    resp = client.post("/api/chat", json={...})
-
 # Mock pattern for WebSocket:
 @patch("app.main.run_unified_agent", new_callable=AsyncMock)
 def test_ws(self, mock_agent, client):
-    mock_agent.return_value = {"mermaid_code": "...", "explanation": "..."}
+    mock_agent.return_value = {"explanation": "...", "follow_up_commands": ["..."]}
     with client.websocket_connect("/api/chat/ws") as ws:
-        ws.send_json({"type": "user_message", ...})
+        ws.send_json({"type": "user_message", "message": "...", ...})
 ```
 
 - Run: `cd backend && uv run pytest -v`
+- Lint: `cd backend && uv run ruff check .`
 - Tests use `TestClient` with the FastAPI app directly (no server needed)
+- `test_agent.py` has unit tests for helper functions (`_clean_markdown`, `_resolve_schema_refs`, `_parse_follow_ups`, `_load_config_schema`), `AgentDeps` (resolve, timeout, cleanup), and doc/config reading
+- `test_api.py` has integration tests for the WebSocket endpoint (user message, image upload, unknown type, agent error, validation errors) and health check

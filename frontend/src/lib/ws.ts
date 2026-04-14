@@ -12,12 +12,13 @@
 
 export interface WsCallbacks {
     onStatus: (message: string) => void;
+    onTextDelta: (content: string) => void;
     onEnhancedImage: (image: string) => void;
     onMessage: (content: string, followUpCommands: string[]) => void;
     onError: (message: string) => void;
     onDone: () => void;
-    /** Render mermaid code in the browser, return screenshot or error. */
-    renderAndCapture: (mermaidCode: string) => Promise<{ image?: string; error?: string }>;
+    /** Render mermaid code in the browser, return success or error. */
+    renderAndCapture: (mermaidCode: string) => Promise<{ success?: boolean; error?: string }>;
     /** Capture the currently displayed diagram as a screenshot. */
     captureScreenshot: () => Promise<{ image?: string; error?: string }>;
 }
@@ -53,6 +54,9 @@ export interface WsHandle {
     done: Promise<void>;
 }
 
+const MAX_CONNECT_RETRIES = 2;
+const RETRY_DELAY_MS = 1000;
+
 export function sendWsMessage(
     payload: Payload,
     callbacks: WsCallbacks,
@@ -61,15 +65,8 @@ export function sendWsMessage(
     let stopped = false;
 
     const done = new Promise<void>((resolve, reject) => {
-        try {
-            ws = new WebSocket(getWsUrl());
-        } catch (e: any) {
-            callbacks.onError(`WebSocket connection failed: ${e.message}`);
-            callbacks.onDone();
-            reject(e);
-            return;
-        }
-
+        let retries = 0;
+        let connected = false;
         let resolved = false;
         let doneReceived = false;
 
@@ -80,65 +77,94 @@ export function sendWsMessage(
             }
         }
 
-        ws.onopen = () => {
-            ws.send(JSON.stringify(payload));
-        };
-
-        ws.onmessage = async (event) => {
-            let msg: any;
+        function connect() {
             try {
-                msg = JSON.parse(event.data);
-            } catch {
+                ws = new WebSocket(getWsUrl());
+            } catch (e: any) {
+                if (retries < MAX_CONNECT_RETRIES) {
+                    retries++;
+                    setTimeout(connect, RETRY_DELAY_MS * retries);
+                    return;
+                }
+                callbacks.onError(`WebSocket connection failed: ${e.message}`);
+                callbacks.onDone();
+                reject(e);
                 return;
             }
 
-            switch (msg.type) {
-                case "status":
-                    callbacks.onStatus(msg.message ?? "");
-                    break;
+            ws.onopen = () => {
+                connected = true;
+                retries = 0;
+                ws.send(JSON.stringify(payload));
+            };
 
-                case "tool_request":
-                    await handleToolRequest(ws, msg, callbacks);
-                    break;
+            ws.onmessage = async (event) => {
+                let msg: any;
+                try {
+                    msg = JSON.parse(event.data);
+                } catch {
+                    return;
+                }
 
-                case "enhanced_image":
-                    callbacks.onEnhancedImage(msg.image);
-                    break;
+                switch (msg.type) {
+                    case "status":
+                        callbacks.onStatus(msg.message ?? "");
+                        break;
 
-                case "message":
-                    callbacks.onMessage(
-                        msg.content ?? "",
-                        msg.follow_up_commands ?? [],
-                    );
-                    break;
+                    case "text_delta":
+                        callbacks.onTextDelta(msg.content ?? "");
+                        break;
 
-                case "error":
-                    callbacks.onError(msg.message ?? "Unknown error");
-                    break;
+                    case "tool_request":
+                        await handleToolRequest(ws, msg, callbacks);
+                        break;
 
-                case "done":
-                    doneReceived = true;
+                    case "enhanced_image":
+                        callbacks.onEnhancedImage(msg.image);
+                        break;
+
+                    case "message":
+                        callbacks.onMessage(
+                            msg.content ?? "",
+                            msg.follow_up_commands ?? [],
+                        );
+                        break;
+
+                    case "error":
+                        callbacks.onError(msg.message ?? "Unknown error");
+                        break;
+
+                    case "done":
+                        doneReceived = true;
+                        callbacks.onDone();
+                        ws.close();
+                        finish();
+                        break;
+                }
+            };
+
+            ws.onerror = () => {
+                if (!connected && retries < MAX_CONNECT_RETRIES) {
+                    retries++;
+                    setTimeout(connect, RETRY_DELAY_MS * retries);
+                    return;
+                }
+                if (!doneReceived) {
+                    callbacks.onError("WebSocket connection error");
                     callbacks.onDone();
-                    ws.close();
-                    finish();
-                    break;
-            }
-        };
+                }
+                finish();
+            };
 
-        ws.onerror = () => {
-            if (!doneReceived) {
-                callbacks.onError("WebSocket connection error");
-                callbacks.onDone();
-            }
-            finish();
-        };
+            ws.onclose = () => {
+                if (!doneReceived) {
+                    callbacks.onDone();
+                }
+                finish();
+            };
+        }
 
-        ws.onclose = () => {
-            if (!doneReceived) {
-                callbacks.onDone();
-            }
-            finish();
-        };
+        connect();
     });
 
     return {
@@ -163,7 +189,7 @@ async function handleToolRequest(
     msg: { id: string; name: string; args: any },
     callbacks: WsCallbacks,
 ): Promise<void> {
-    let result: { image?: string; error?: string };
+    let result: Record<string, unknown>;
 
     try {
         switch (msg.name) {

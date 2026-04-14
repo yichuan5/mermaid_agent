@@ -353,8 +353,59 @@ body {
     cursor: not-allowed;
 }
 
+/* Streaming cursor on assistant message */
+.message-bubble.streaming::after {
+    content: "";
+    display: inline-block;
+    width: 6px;
+    height: 14px;
+    background: var(--accent-light);
+    margin-left: 2px;
+    vertical-align: text-bottom;
+    animation: blink-cursor 0.7s step-end infinite;
+}
+
+@keyframes blink-cursor {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0; }
+}
+
+/* New Chat button */
+.new-chat-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--text-secondary);
+    background: rgba(99, 102, 241, 0.08);
+    border: 1px solid var(--border-bright);
+    border-radius: var(--radius-sm);
+    padding: 5px 12px;
+    cursor: pointer;
+    transition: all var(--transition);
+    white-space: nowrap;
+}
+
+.new-chat-btn:hover:not(:disabled) {
+    color: #fff;
+    background: var(--accent);
+    border-color: var(--accent);
+    box-shadow: 0 2px 10px var(--accent-glow);
+    transform: translateY(-1px);
+}
+
+.new-chat-btn:active:not(:disabled) {
+    transform: scale(0.97);
+}
+
+.new-chat-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+}
+
 /* Thinking badge in header */
-.thinking-badge {
+.chat-panel .thinking-badge {
     margin-left: auto;
     font-size: 12px;
     font-weight: 600;

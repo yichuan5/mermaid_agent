@@ -113,6 +113,43 @@ class TestWebSocket:
             types = [m["type"] for m in messages]
             assert "error" in types
 
+    def test_ws_validation_error_missing_message(self, client):
+        """user_message without required 'message' field should return a validation error."""
+        with client.websocket_connect("/api/chat/ws") as ws:
+            ws.send_json({
+                "type": "user_message",
+            })
+
+            messages = []
+            while True:
+                msg = ws.receive_json()
+                messages.append(msg)
+                if msg["type"] == "done":
+                    break
+
+            types = [m["type"] for m in messages]
+            assert "error" in types
+            error_msg = next(m for m in messages if m["type"] == "error")
+            assert "Invalid message" in error_msg["message"]
+
+    def test_ws_validation_error_image_upload_no_image(self, client):
+        """image_upload without 'image' field should return a validation error."""
+        with client.websocket_connect("/api/chat/ws") as ws:
+            ws.send_json({
+                "type": "image_upload",
+                "message": "Convert",
+            })
+
+            messages = []
+            while True:
+                msg = ws.receive_json()
+                messages.append(msg)
+                if msg["type"] == "done":
+                    break
+
+            types = [m["type"] for m in messages]
+            assert "error" in types
+
 
 # ── GET /health ─────────────────────────────────────────────────
 

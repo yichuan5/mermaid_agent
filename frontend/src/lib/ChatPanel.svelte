@@ -10,6 +10,7 @@
     onSubmit,
     onStop,
     onImageUpload,
+    onClearHistory,
     chartType,
     onChartTypeChange,
   }: {
@@ -19,6 +20,7 @@
     onSubmit: (text: string) => void;
     onStop: () => void;
     onImageUpload: (file: File, message: string) => void;
+    onClearHistory?: () => void;
     chartType: string | null;
     onChartTypeChange: (chartType: string | null) => void;
   } = $props();
@@ -135,8 +137,19 @@
 
 <section class="panel chat-panel">
   <div class="panel-header">
-    <span class="panel-icon"></span>
-    <h2>AI Assistant</h2>
+    {#if onClearHistory}
+      <button
+        class="new-chat-btn"
+        onclick={onClearHistory}
+        disabled={isLoading}
+        title="Start a new conversation"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round">
+          <line x1="12" y1="5" x2="12" y2="19" /><line x1="5" y1="12" x2="19" y2="12" />
+        </svg>
+        New Chat
+      </button>
+    {/if}
     {#if isLoading}
       <span class="thinking-badge">{statusMessage || "thinking…"}</span>
     {/if}
@@ -145,7 +158,7 @@
   <div class="messages" bind:this={messagesEl}>
     {#each messages as msg}
       <div class="message {msg.role}">
-        <div class="message-bubble">
+        <div class="message-bubble" class:streaming={msg.isStreaming}>
           {#if msg.imageUrl}
             <img
               src={msg.imageUrl}
@@ -174,7 +187,7 @@
         {/if}
       </div>
     {/each}
-    {#if isLoading}
+    {#if isLoading && !(messages.length > 0 && messages[messages.length - 1].isStreaming)}
       <div class="message assistant">
         <div class="message-bubble loading">
           <span></span><span></span><span></span>

@@ -90,6 +90,7 @@
       onSubmit={chat.handleUserSubmit}
       onStop={chat.stopAgent}
       onImageUpload={chat.handleImageUpload}
+      onClearHistory={chat.clearHistory}
       chartType={chat.chartType}
       onChartTypeChange={(ct) => (chat.chartType = ct)}
     />

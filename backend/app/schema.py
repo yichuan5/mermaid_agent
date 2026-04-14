@@ -1,4 +1,5 @@
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class ChatResponse(BaseModel):
@@ -9,3 +10,22 @@ class ChatResponse(BaseModel):
         default=[],
         description="Choices to modify the diagram in the form of specific actionable commands.",
     )
+
+
+# ── WebSocket message validation models ──────────────────────────
+
+
+class WsUserMessage(BaseModel):
+    type: Literal["user_message"]
+    message: str
+    current_mermaid_code: str | None = None
+    history: list[dict] = Field(default_factory=list)
+    chart_type: str | None = None
+
+
+class WsImageUpload(BaseModel):
+    type: Literal["image_upload"]
+    image: str
+    mime_type: str = "image/png"
+    message: str = ""
+    history: list[dict] = Field(default_factory=list)

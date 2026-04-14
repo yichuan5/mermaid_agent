@@ -5,6 +5,7 @@ Dynamically discovers .md files via the GitHub Contents API
 
 import asyncio
 import logging
+import os
 import httpx
 from pathlib import Path
 
@@ -13,7 +14,7 @@ logger = logging.getLogger(__name__)
 DOCS_DIR = Path(__file__).parent.parent / "docs" / "mermaid"
 
 GITHUB_API_BASE = "https://api.github.com/repos/mermaid-js/mermaid/contents"
-GITHUB_REF = "mermaid@11.12.3"
+GITHUB_REF = os.getenv("MERMAID_DOCS_REF", "mermaid@11.12.3")
 
 # Directories to fetch from the Mermaid repo
 DOC_PATHS = ["docs/syntax"]

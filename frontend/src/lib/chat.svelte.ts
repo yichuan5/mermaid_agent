@@ -3,6 +3,9 @@ import { sendWsMessage, type WsCallbacks, type WsHandle, type UserMessagePayload
 
 export type PreviewTab = "mermaid" | "enhanced";
 
+const STORAGE_MESSAGES = "mermaid_agent_messages";
+const STORAGE_CODE = "mermaid_agent_diagram_code";
+
 function buildHistory(
   msgs: Message[],
   { skip }: { skip?: "first" | "last" | "both" } = {},
@@ -45,33 +48,70 @@ flowchart TD
     %% Feedback Loops
     Code -- "iterate/feedback" --> AI`;
 
+const WELCOME_MESSAGE: Message = {
+  role: "assistant",
+  content:
+    "Hi! I'm your Mermaid diagram assistant. Describe a diagram in detail and I'll generate it for you.",
+};
+
+function loadFromStorage(): { messages: Message[]; code: string } | null {
+  try {
+    const storedMsgs = localStorage.getItem(STORAGE_MESSAGES);
+    const storedCode = localStorage.getItem(STORAGE_CODE);
+    if (storedMsgs) {
+      const msgs = JSON.parse(storedMsgs) as Message[];
+      if (Array.isArray(msgs) && msgs.length > 0) {
+        return { messages: msgs, code: storedCode || DEFAULT_DIAGRAM };
+      }
+    }
+  } catch {
+    // Corrupted storage — ignore
+  }
+  return null;
+}
+
+function saveToStorage(messages: Message[], code: string) {
+  try {
+    const serializable = messages
+      .filter((m) => !m.isStreaming)
+      .map(({ role, content, followUpSuggestions }) => ({
+        role,
+        content,
+        followUpSuggestions,
+      }));
+    localStorage.setItem(STORAGE_MESSAGES, JSON.stringify(serializable));
+    localStorage.setItem(STORAGE_CODE, code);
+  } catch {
+    // Storage full or unavailable — ignore
+  }
+}
+
 export function createChatStore() {
-  let diagramCode = $state(DEFAULT_DIAGRAM);
+  const restored = typeof window !== "undefined" ? loadFromStorage() : null;
+
+  let diagramCode = $state(restored?.code ?? DEFAULT_DIAGRAM);
   let codeSource: "ai" | "user" = $state("user");
 
-  let messages = $state<Message[]>([
-    {
-      role: "assistant",
-      content:
-        "Hi! I'm your Mermaid diagram assistant. Describe a diagram in detail and I'll generate it for you.",
-    },
-  ]);
+  let messages = $state<Message[]>(restored?.messages ?? [WELCOME_MESSAGE]);
   let isLoading = $state(false);
 
   let chartType: string | null = $state(null);
 
-  // Enhancement state
   let enhancedImage: string | null = $state(null);
   let activePreviewTab: PreviewTab = $state("mermaid");
 
-  // Status message from agent tools (e.g. "Rendering diagram…")
   let statusMessage: string | null = $state(null);
 
   let activeWsHandle: WsHandle | null = null;
 
-  // Callbacks set by the page component to interact with the Preview
   let getDiagramImage: (() => Promise<string | null>) | null = null;
   let renderMermaidCode: ((code: string) => Promise<{ error?: string }>) | null = null;
+
+  let saveTimer: ReturnType<typeof setTimeout>;
+  function scheduleSave() {
+    clearTimeout(saveTimer);
+    saveTimer = setTimeout(() => saveToStorage(messages, diagramCode), 800);
+  }
 
   /**
    * Build WsCallbacks that wire tool requests into the Preview component.
@@ -82,29 +122,62 @@ export function createChatStore() {
         statusMessage = msg || null;
       },
 
+      onTextDelta(content: string) {
+        const last = messages[messages.length - 1];
+        if (last && last.isStreaming) {
+          last.content += content;
+        } else {
+          messages.push({
+            role: "assistant",
+            content,
+            isStreaming: true,
+          });
+        }
+      },
+
       onEnhancedImage(image: string) {
         enhancedImage = image;
         activePreviewTab = "enhanced";
       },
 
       onMessage(content: string, followUpCommands: string[]) {
-        messages.push({
-          role: "assistant",
-          content,
-          followUpSuggestions: followUpCommands,
-        });
+        const last = messages[messages.length - 1];
+        if (last && last.isStreaming) {
+          last.content = content || last.content;
+          last.followUpSuggestions = followUpCommands;
+          last.isStreaming = false;
+        } else {
+          messages.push({
+            role: "assistant",
+            content,
+            followUpSuggestions: followUpCommands,
+          });
+        }
+        scheduleSave();
       },
 
       onError(message: string) {
-        messages.push({
-          role: "assistant",
-          content: `Error: ${message}`,
-        });
+        const last = messages[messages.length - 1];
+        if (last && last.isStreaming) {
+          last.content += `\n\nError: ${message}`;
+          last.isStreaming = false;
+        } else {
+          messages.push({
+            role: "assistant",
+            content: `Error: ${message}`,
+          });
+        }
+        scheduleSave();
       },
 
       onDone() {
+        const last = messages[messages.length - 1];
+        if (last && last.isStreaming) {
+          last.isStreaming = false;
+        }
         isLoading = false;
         statusMessage = null;
+        scheduleSave();
       },
 
       async renderAndCapture(mermaidCode: string) {
@@ -118,17 +191,7 @@ export function createChatStore() {
           }
         }
 
-        // Wait a tick for the render to propagate, then capture
-        await new Promise((r) => setTimeout(r, 600));
-
-        if (getDiagramImage) {
-          const image = await getDiagramImage();
-          if (image) {
-            return { image };
-          }
-          return { error: "Failed to capture diagram image" };
-        }
-        return { error: "Diagram capture not available" };
+        return { success: true };
       },
 
       async captureScreenshot() {
@@ -183,6 +246,7 @@ export function createChatStore() {
   function handleUserSubmit(text: string) {
     clearFollowUps();
     messages.push({ role: "user", content: text });
+    scheduleSave();
     sendChatRequest(text, diagramCode);
   }
 
@@ -199,7 +263,6 @@ export function createChatStore() {
 
     const history = buildHistory(messages, { skip: "both" });
 
-    // Read file as base64
     const arrayBuf = await file.arrayBuffer();
     const bytes = new Uint8Array(arrayBuf);
     let binary = "";
@@ -233,6 +296,7 @@ export function createChatStore() {
   function handleCodeChange(code: string) {
     codeSource = "user";
     diagramCode = code;
+    scheduleSave();
   }
 
   function stopAgent() {
@@ -249,6 +313,18 @@ export function createChatStore() {
     const fixMsg = `Fix the rendering error in the Mermaid code.\nError: ${error}`;
     messages.push({ role: "user", content: fixMsg });
     sendChatRequest(fixMsg, code);
+  }
+
+  function clearHistory() {
+    messages.splice(0, messages.length, WELCOME_MESSAGE);
+    diagramCode = DEFAULT_DIAGRAM;
+    enhancedImage = null;
+    activePreviewTab = "mermaid";
+    codeSource = "user";
+    try {
+      localStorage.removeItem(STORAGE_MESSAGES);
+      localStorage.removeItem(STORAGE_CODE);
+    } catch {}
   }
 
   return {
@@ -268,5 +344,6 @@ export function createChatStore() {
     handleCodeChange,
     handleFixRequest,
     stopAgent,
+    clearHistory,
   };
 }

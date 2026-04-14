@@ -3,9 +3,11 @@ import asyncio
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import ValidationError
 
 from app.services.agent import run_unified_agent, AgentDeps
 from app.services.doc_fetcher import fetch_docs
+from app.schema import WsUserMessage, WsImageUpload
 import logging
 
 logger = logging.getLogger(__name__)
@@ -75,8 +77,19 @@ async def chat_ws(ws: WebSocket):
         data = await ws.receive_json()
         msg_type = data.get("type")
 
-        if msg_type not in ("user_message", "image_upload"):
-            await ws.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+        # Validate incoming message with Pydantic models
+        try:
+            if msg_type == "user_message":
+                WsUserMessage(**data)
+            elif msg_type == "image_upload":
+                WsImageUpload(**data)
+            else:
+                await ws.send_json({"type": "error", "message": f"Unknown message type: {msg_type}"})
+                await ws.send_json({"type": "done"})
+                return
+        except ValidationError as e:
+            errors = "; ".join(f"{err['loc']}: {err['msg']}" for err in e.errors())
+            await ws.send_json({"type": "error", "message": f"Invalid message: {errors}"})
             await ws.send_json({"type": "done"})
             return
 

@@ -3,6 +3,7 @@ import json
 import logging
 import base64
 import asyncio
+from collections.abc import AsyncIterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from uuid import uuid4
@@ -19,10 +20,12 @@ from pydantic_ai.messages import (
     UserPromptPart,
     TextPart,
     BinaryContent,
+    AgentStreamEvent,
+    PartDeltaEvent,
+    TextPartDelta,
 )
 from google.genai import types as genai_types
 from fastapi import WebSocket
-from app.schema import ChatResponse
 from .prompts import SYSTEM_PROMPT, ENHANCE_PROMPT
 
 logger = logging.getLogger(__name__)
@@ -120,17 +123,33 @@ def _read_mermaid_syntax_impl(diagram_type: DiagramType) -> str:
     return f"Documentation for '{diagram_type}' not found. Please select a valid diagram type."
 
 
+_config_schema_cache: dict | None = None
+
+
+def _load_config_schema() -> dict | None:
+    """Load and cache the Mermaid config schema from disk."""
+    global _config_schema_cache
+    if _config_schema_cache is not None:
+        return _config_schema_cache
+
+    path = DOCS_DIR.parent / "config.schema.json"
+    if not path.exists():
+        return None
+
+    try:
+        _config_schema_cache = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+
+    return _config_schema_cache
+
+
 def _read_mermaid_config_impl(property_name: str | None = None) -> str:
     """Core logic for reading Mermaid config schema."""
     logger.info("Agent requested Mermaid config schema (property_name=%r)", property_name)
-    path = DOCS_DIR.parent / "config.schema.json"
-    if not path.exists():
+    schema = _load_config_schema()
+    if schema is None:
         return "Configuration schema not found locally."
-
-    try:
-        schema = json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError:
-        return "Failed to parse the configuration schema JSON."
 
     properties = schema.get("properties", {})
 
@@ -153,6 +172,29 @@ def _read_mermaid_config_impl(property_name: str | None = None) -> str:
 
     resolved_prop = _resolve_schema_refs(schema, properties[property_name])
     return json.dumps({property_name: resolved_prop}, indent=2)
+
+
+def _parse_follow_ups(text: str) -> tuple[str, list[str]]:
+    """Extract follow-up suggestions from the agent's text response.
+
+    Scans backwards for lines starting with ">> " and splits them off.
+    """
+    lines = text.rstrip().split("\n")
+    follow_ups: list[str] = []
+    i = len(lines) - 1
+
+    while i >= 0:
+        line = lines[i].strip()
+        if line.startswith(">> "):
+            follow_ups.insert(0, line[3:].strip())
+            i -= 1
+        elif line == "" and follow_ups:
+            i -= 1
+        else:
+            break
+
+    explanation = "\n".join(lines[: i + 1]).strip()
+    return explanation, follow_ups
 
 
 async def _enhance_image_impl(
@@ -254,7 +296,7 @@ class AgentDeps:
 
 unified_agent = Agent(
     model=llm,
-    output_type=ChatResponse,
+    output_type=str,
     system_prompt=SYSTEM_PROMPT,
     deps_type=AgentDeps,
     retries=2,
@@ -288,13 +330,11 @@ async def create_mermaid_diagram(
 ) -> str:
     """Create or modify a Mermaid diagram. Pass the complete Mermaid code.
 
-    The code is rendered in the user's browser and a screenshot is captured.
-    Returns JSON with either:
-    - {"image": "<base64 PNG>"} on success
-    - {"error": "<error message>"} on render failure
+    The code is rendered in the user's browser. Returns either:
+    - A success confirmation (diagram is live — do NOT call again)
+    - An error message — fix the code and retry
 
-    If rendering fails, fix the code and call this tool again.
-    Only call this when the diagram code needs to change.
+    Only call this tool once per user request unless you get an error back.
     """
     await ctx.deps.ws.send_json(
         {"type": "status", "message": "Rendering diagram…"}
@@ -302,7 +342,9 @@ async def create_mermaid_diagram(
     result = await ctx.deps.request_client_tool(
         "render_and_capture", {"mermaid_code": mermaid_code}
     )
-    return json.dumps(result)
+    if "error" in result:
+        return f"Render error: {result['error']}"
+    return "Diagram rendered successfully and is now visible to the user."
 
 
 @unified_agent.tool
@@ -337,6 +379,18 @@ async def enhance_diagram(
         return result.get("explanation", "Enhanced the diagram successfully.")
 
     return result.get("explanation", "No enhancement was needed.")
+
+
+async def _stream_text_handler(
+    ctx: RunContext[AgentDeps],
+    events: AsyncIterable[AgentStreamEvent],
+) -> None:
+    """event_stream_handler: forward text deltas to the frontend over WebSocket."""
+    async for event in events:
+        if isinstance(event, PartDeltaEvent) and isinstance(event.delta, TextPartDelta):
+            await ctx.deps.ws.send_json(
+                {"type": "text_delta", "content": event.delta.content_delta}
+            )
 
 
 async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
@@ -385,9 +439,13 @@ async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
             user_prompt=prompt_parts,
             message_history=messages,
             deps=deps,
+            event_stream_handler=_stream_text_handler,
         )
     except Exception:
         logger.exception("run_unified_agent: agent failed")
         raise
 
-    return result.output.model_dump()
+    full_text = result.output
+    explanation, follow_ups = _parse_follow_ups(full_text)
+
+    return {"explanation": explanation, "follow_up_commands": follow_ups}

@@ -9,29 +9,29 @@ AI-powered Mermaid diagram generator with live editing, auto-fix, and image enha
 
 ## Architecture
 
-- **Backend** (`backend/`): FastAPI + Pydantic AI agents powered by Google Gemini
+- **Backend** (`backend/`): FastAPI + Pydantic AI agent powered by Google Gemini
 - **Frontend** (`frontend/`): SvelteKit (Svelte 5 runes, Vite) with CodeMirror editor + Mermaid.js preview
-- **Primary protocol**: WebSocket (`/api/chat/ws`) — server-side unified agent with client-side tools
-- **Legacy REST**: `/api/chat`, `/api/fix`, `/api/chat/image`, `/api/enhance` endpoints still exist for backward compat
-- **Proxy**: Frontend `routes/api/[...path]/+server.ts` has been removed. Nginx handles routing in Docker; Vite proxy handles dev.
+- **Primary protocol**: WebSocket (`/api/chat/ws`) — server-side unified agent with client-side tools and streamed text responses
+- **Proxy**: Nginx handles routing in Docker; Vite proxy handles dev.
 - **Docker**: `docker-compose.yml` runs three services: `nginx` (exposed on :3000), `frontend` (internal), `backend` (internal)
 
 ## Key Data Flow
 
 ```
-WebSocket flow (primary):
-User chat → WS /api/chat/ws → unified_agent (Gemini)
+WebSocket flow:
+User chat → WS /api/chat/ws → Pydantic validation → unified_agent (Gemini, output_type=str)
   Agent decides which tools to call:
-  - edit_diagram: sends tool_request: render_and_capture(code) → frontend renders + captures screenshot
+  - create_mermaid_diagram: sends tool_request: render_and_capture(code) → frontend renders + captures screenshot
     → tool_result: {image: base64} or {error: msg}
     (agent fixes code and retries if error)
   - enhance_diagram: captures screenshot via tool_request → calls Gemini image gen
     ← enhanced_image
   - read_mermaid_syntax / read_mermaid_config: server-side doc lookup
-  ← message (explanation + follow_up_commands), done
+  ← text_delta (streamed via event_stream_handler)
+  ← message (explanation + follow_up_commands parsed from >> prefixed lines), done
 
 Agent does NOT return mermaid_code in the final response. Code delivery
-happens solely through the edit_diagram tool (render_and_capture client tool).
+happens solely through the create_mermaid_diagram tool (render_and_capture client tool).
 ```
 
 ## Deployment
@@ -46,42 +46,48 @@ happens solely through the edit_diagram tool (render_and_capture client tool).
 
 | File | What it does |
 |------|-------------|
-| `app/main.py` | WebSocket endpoint `/api/chat/ws` + legacy REST routes |
-| `app/schema.py` | Response Pydantic model (`ChatResponse`: explanation + follow_up_commands, no mermaid_code) |
-| `app/services/agent.py` | `AgentDeps` (WS tool bridge), `unified_agent` with 4 tools, legacy agents for REST |
-| `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT` (unified), `LEGACY_SYSTEM_PROMPT`, `FIX_PROMPT`, etc. |
-| `app/services/doc_fetcher.py` | Fetches Mermaid syntax docs from GitHub into `app/docs/` at startup |
+| `app/main.py` | WebSocket endpoint `/api/chat/ws`, Pydantic validation of incoming messages, `/health` endpoint |
+| `app/schema.py` | `ChatResponse` model (legacy), `WsUserMessage` and `WsImageUpload` validation models |
+| `app/services/agent.py` | `AgentDeps` (WS tool bridge), `unified_agent` (output_type=str) with 4 tools, `_stream_text_handler`, `_parse_follow_ups` |
+| `app/services/prompts.py` | System prompts: `SYSTEM_PROMPT` (unified agent) and `ENHANCE_PROMPT` (image gen) |
+| `app/services/doc_fetcher.py` | Fetches Mermaid syntax docs from GitHub into `app/docs/` at startup (version configurable via `MERMAID_DOCS_REF` env var) |
 | `app/docs/` | Cached Mermaid syntax `.md` files + `config.schema.json` (gitignored, fetched at runtime) |
 
 ## Frontend Key Files
 
 | File | What it does |
 |------|-------------|
-| `src/lib/ws.ts` | WebSocket client: sends messages, dispatches events, executes client-side tools |
-| `src/lib/chat.svelte.ts` | Central store (`createChatStore`): all state via `$state` runes — messages, diagramCode, chartType, enhancedImage |
-| `src/lib/ChatPanel.svelte` | Chat UI: message list, Chart Type dropdown, text input, image upload |
+| `src/lib/ws.ts` | WebSocket client: sends messages, dispatches events (incl. `text_delta` streaming), executes client-side tools, connection retry with backoff |
+| `src/lib/chat.svelte.ts` | Central store (`createChatStore`): all state via `$state` runes — messages, diagramCode, chartType, enhancedImage, streaming text accumulation, localStorage persistence, `clearHistory` |
+| `src/lib/ChatPanel.svelte` | Chat UI: message list, streaming cursor, Chart Type dropdown, text input, image upload, "New Chat" button |
 | `src/lib/Editor.svelte` | CodeMirror 6 editor with `codemirror-lang-mermaid`, fires `onFocus` callback |
 | `src/lib/Preview.svelte` | Full-width tab bar (Mermaid / AI Enhanced), rendering, SVG→JPEG capture, zoom/pan |
-| `src/lib/types.ts` | `Message` interface |
+| `src/lib/types.ts` | `Message` interface (includes `isStreaming` flag for in-flight text deltas) |
 | `src/routes/+page.svelte` | Main page: 3-panel resizable layout, wires store to components |
 
 ## Important Patterns
 
 - **Svelte 5 runes**: All state uses `$state()`, `$effect()`, `$props()` — no legacy `$:` or stores
-- **Unified agent loop**: Server runs one `pydantic-ai` agent with 4 tools. Code editing is a tool (`edit_diagram`) not a default output — the agent chooses whether to edit code, enhance visually, or just respond with text. Client-side tools (`render_and_capture`, `capture_screenshot`) execute via WS tool_request/tool_result protocol. Auto-fix is handled by the agent (it sees render errors and retries).
+- **Streaming responses**: The agent uses `event_stream_handler` to forward `TextPartDelta` events as `text_delta` WS messages. The frontend accumulates deltas into a streaming message bubble (with blinking cursor). The final `message` event carries the clean explanation + follow-up commands.
+- **Follow-up parsing**: The agent's `output_type=str` text response includes `>> ` prefixed follow-up suggestions at the end. `_parse_follow_ups()` strips these into a separate list for the frontend's suggestion chips.
+- **Unified agent loop**: Server runs one `pydantic-ai` agent with 4 tools. Code editing is a tool (`create_mermaid_diagram`) not a default output — the agent chooses whether to edit code, enhance visually, or just respond with text. Client-side tools (`render_and_capture`, `capture_screenshot`) execute via WS tool_request/tool_result protocol. Auto-fix is handled by the agent (it sees render errors and retries).
 - **AgentDeps**: Dataclass injected via `RunContext[AgentDeps]`. Contains the WebSocket + pending tool futures. `request_client_tool()` sends a WS message and awaits the response via `asyncio.Future`.
+- **Input validation**: Incoming WS messages are validated against `WsUserMessage` / `WsImageUpload` Pydantic models before reaching the agent.
+- **Config caching**: `config.schema.json` is parsed once on first access via `_load_config_schema()` and reused from memory.
+- **Conversation persistence**: Messages and diagram code are saved to `localStorage` (debounced 800ms). Restored on page load. "New Chat" clears both.
+- **WS connection retry**: The frontend retries failed WebSocket connections up to 2 times with backoff before surfacing an error.
 - **Tab content persistence**: Preview uses `style:display` (not `{#if}`) so both Mermaid SVG and Enhanced panels stay in DOM
 - **Editor focus → Mermaid tab**: Clicking/focusing the code editor automatically switches the preview to the Mermaid tab
-- **Agent tools**: `read_mermaid_syntax`, `read_mermaid_config` (server-side docs), `edit_diagram` (renders code via client-side `render_and_capture`), `enhance_diagram` (server-side image gen)
+- **Agent tools**: `read_mermaid_syntax`, `read_mermaid_config` (server-side docs), `create_mermaid_diagram` (renders code via client-side `render_and_capture`), `enhance_diagram` (server-side image gen)
 - **No Enhance button**: Enhancement is triggered by the agent when appropriate (user asks via chat). No manual Enhance button in the UI.
 
 ## Tests
 
-- **Backend**: `pytest` — `backend/tests/test_api.py` (REST + WebSocket endpoints), `test_agent.py` (tool functions). Run: `cd backend && uv run pytest`
+- **Backend**: `pytest` — `backend/tests/test_api.py` (WebSocket endpoints + validation + health), `test_agent.py` (26 unit tests: helpers, parsing, config caching, AgentDeps). Run: `cd backend && uv run pytest`
 - **Frontend**: Playwright e2e — `frontend/test/e2e.spec.ts`. Run: `cd frontend && npx playwright test`
 - **WSL2 note**: E2E tests block Google Fonts (`blockExternalRequests`) and wait for `[data-hydrated]` to handle SSR hydration timing.
 
 ## Environment
 
-- `backend/.env`: `GEMINI_API_KEY`, `GEMINI_MODEL` (default gemini-2.5-flash), `ENHANCE_MODEL` (default gemini-2.5-flash-preview-04-17)
+- `backend/.env`: `GEMINI_API_KEY`, `GEMINI_MODEL` (default gemini-3-flash-preview), `GEMINI_ENHANCE_MODEL` (default gemini-3.1-flash-image-preview), `MERMAID_DOCS_REF` (default mermaid@11.12.3)
 - No `python` binary in WSL2 — use `uv run python` or `python3`
