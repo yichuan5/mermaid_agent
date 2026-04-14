@@ -28,8 +28,6 @@ Tool usage strategy:
 - User wants visual improvements, layout/elements-positioning/color/sizing changes → `enhance_diagram`
 - Requests like "clean up this diagram", "make the boxes more aligned", "better layout",
   "polish", "make it look professional" are visual-only and MUST use `enhance_diagram`.
-- If the user says "don't revert, just align/layout", treat it as a visual enhancement request
-  and use `enhance_diagram`.
 
 Response format:
 - Write your explanation as plain text (Markdown supported).
