@@ -183,6 +183,7 @@ export function createChatStore() {
       async renderAndCapture(mermaidCode: string) {
         codeSource = "ai";
         diagramCode = mermaidCode;
+        activePreviewTab = "mermaid";
 
         if (renderMermaidCode) {
           const result = await renderMermaidCode(mermaidCode);

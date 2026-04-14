@@ -331,7 +331,7 @@ async def create_mermaid_diagram(
     """Create or modify a Mermaid diagram. Pass the complete Mermaid code.
 
     The code is rendered in the user's browser. Returns either:
-    - A success confirmation (diagram is live — do NOT call again)
+    - A success confirmation
     - An error message — fix the code and retry
 
     Only call this tool once per user request unless you get an error back.
@@ -351,13 +351,7 @@ async def create_mermaid_diagram(
 async def enhance_diagram(
     ctx: RunContext[AgentDeps], instructions: str
 ) -> str:
-    """Visually enhance the currently rendered diagram using AI image generation.
-
-    Mermaid's auto-layout often produces overlapping nodes, cramped labels, poor
-    spacing, or awkward aspect ratios. These are inherent layout limitations that
-    code changes cannot reliably fix. Call this tool to clean up such issues, or
-    whenever the user asks to improve the diagram's appearance or readability.
-    Captures the current diagram, enhances it, and sends the result to the user.
+    """Visually enhance and modify the currently rendered diagram using AI image generation.
     """
     await ctx.deps.ws.send_json(
         {"type": "status", "message": "Enhancing diagram with AI…"}
