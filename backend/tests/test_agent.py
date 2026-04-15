@@ -14,6 +14,7 @@ from app.services.agent import (
     _parse_follow_ups,
     _load_config_schema,
     AgentDeps,
+    _build_user_prompt,
 )
 
 
@@ -102,6 +103,23 @@ class TestParseFollowUps:
         explanation, follow_ups = _parse_follow_ups(text)
         assert explanation == "Explanation here."
         assert follow_ups == ["Suggestion one", "Suggestion two"]
+
+
+# ── user prompt formatting ────────────────────────────────────────
+
+
+class TestBuildUserPrompt:
+    def test_contains_delimited_code_and_request_blocks(self):
+        prompt = _build_user_prompt(
+            user_message="Improve layout",
+            chart_type="flowchart",
+            current_mermaid_code="flowchart TD\nA-->B",
+        )
+        assert "=== CHART_TYPE_START ===" in prompt
+        assert "=== CURRENT_MERMAID_CODE_START ===" in prompt
+        assert "=== CURRENT_MERMAID_CODE_END ===" in prompt
+        assert "=== USER_REQUEST_START ===" in prompt
+        assert "=== USER_REQUEST_END ===" in prompt
 
 
 # ── _read_mermaid_syntax_impl ────────────────────────────────────

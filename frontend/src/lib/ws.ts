@@ -69,6 +69,7 @@ export function sendWsMessage(
         let connected = false;
         let resolved = false;
         let doneReceived = false;
+        let toolQueue: Promise<void> = Promise.resolve();
 
         function finish() {
             if (!resolved) {
@@ -98,7 +99,7 @@ export function sendWsMessage(
                 ws.send(JSON.stringify(payload));
             };
 
-            ws.onmessage = async (event) => {
+            ws.onmessage = (event) => {
                 let msg: any;
                 try {
                     msg = JSON.parse(event.data);
@@ -116,7 +117,9 @@ export function sendWsMessage(
                         break;
 
                     case "tool_request":
-                        await handleToolRequest(ws, msg, callbacks);
+                        toolQueue = toolQueue.then(() =>
+                            handleToolRequest(ws, msg, callbacks),
+                        );
                         break;
 
                     case "enhanced_image":

@@ -197,18 +197,51 @@ def _parse_follow_ups(text: str) -> tuple[str, list[str]]:
     return explanation, follow_ups
 
 
+def _build_user_prompt(
+    user_message: str,
+    chart_type: str | None,
+    current_mermaid_code: str | None,
+) -> str:
+    """Build a strongly-delimited prompt so the model separates context from request."""
+    parts: list[str] = []
+
+    if chart_type:
+        parts.append(
+            "=== CHART_TYPE_START ===\n"
+            f"{chart_type}\n"
+            "=== CHART_TYPE_END ==="
+        )
+
+    if current_mermaid_code:
+        parts.append(
+            "=== CURRENT_MERMAID_CODE_START ===\n"
+            "```mermaid\n"
+            f"{current_mermaid_code}\n"
+            "```\n"
+            "=== CURRENT_MERMAID_CODE_END ==="
+        )
+
+    parts.append(
+        "=== USER_REQUEST_START ===\n"
+        f"{user_message}\n"
+        "=== USER_REQUEST_END ==="
+    )
+
+    return "\n\n".join(parts)
+
+
 async def _enhance_image_impl(
     image_base64: str,
     instructions: str = "",
     message: str = "",
-) -> dict:
-    """Call Gemini image generation to enhance a diagram. Shared by REST and WS paths."""
+) -> str | None:
+    """Call Gemini image generation to enhance a diagram. Returns base64 image or None."""
     prompt = ENHANCE_PROMPT + "\n\n"
     if message:
         prompt += f"Original user request: {message}\n\n"
     if instructions:
         prompt += f"Specific enhancement instructions: {instructions}\n\n"
-    prompt += "Here is the rendered diagram to evaluate and potentially enhance:"
+    prompt += "Here is the rendered diagram to enhance:"
 
     image_bytes = base64.b64decode(image_base64)
     image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
@@ -225,38 +258,21 @@ async def _enhance_image_impl(
             model=ENHANCE_MODEL,
             contents=[prompt, image_part],
             config=genai_types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"],
+                response_modalities=["IMAGE"],
             ),
         )
     except Exception:
         logger.exception("enhance_image: Gemini call failed (model=%s)", ENHANCE_MODEL)
         raise
 
-    enhanced_image_b64 = None
-    explanation = ""
-
     if response.candidates:
-        text_parts: list[str] = []
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode(
-                    "utf-8"
-                )
-            elif part.text:
-                text_parts.append(part.text)
-        explanation = "\n\n".join(text_parts)
+                logger.info("enhance_image: done (enhanced=True)")
+                return base64.b64encode(part.inline_data.data).decode("utf-8")
 
-    if not explanation:
-        explanation = (
-            "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."
-        )
-
-    logger.info(
-        "enhance_image: done (enhanced=%s, explanation_len=%d)",
-        enhanced_image_b64 is not None,
-        len(explanation),
-    )
-    return {"enhanced_image": enhanced_image_b64, "explanation": explanation}
+    logger.info("enhance_image: done (enhanced=False)")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -270,6 +286,8 @@ class AgentDeps:
 
     ws: WebSocket
     pending_tools: dict[str, asyncio.Future] = field(default_factory=dict)
+    render_calls: int = 0
+    last_render_had_error: bool = False
 
     async def request_client_tool(self, name: str, args: dict) -> dict:
         """Send a tool request to the frontend and await the result."""
@@ -324,11 +342,11 @@ async def read_mermaid_config(
     return _read_mermaid_config_impl(property_name)
 
 
-@unified_agent.tool
-async def create_mermaid_diagram(
+@unified_agent.tool(name="render_mermaid_diagram")
+async def render_mermaid_diagram(
     ctx: RunContext[AgentDeps], mermaid_code: str
 ) -> str:
-    """Create or modify a Mermaid diagram. Pass the complete Mermaid code.
+    """Render a Mermaid diagram from complete code in the user's browser.
 
     The code is rendered in the user's browser. Returns either:
     - A success confirmation
@@ -336,14 +354,26 @@ async def create_mermaid_diagram(
 
     Only call this tool once per user request unless you get an error back.
     """
+    if ctx.deps.render_calls >= 1 and not ctx.deps.last_render_had_error:
+        logger.warning(
+            "render_mermaid_diagram: blocked repeated render after successful render"
+        )
+        return (
+            "Diagram already rendered successfully for this request. "
+            "Do not call `render_mermaid_diagram` again; continue with explanation only."
+        )
+
     await ctx.deps.ws.send_json(
         {"type": "status", "message": "Rendering diagram…"}
     )
+    ctx.deps.render_calls += 1
     result = await ctx.deps.request_client_tool(
         "render_and_capture", {"mermaid_code": mermaid_code}
     )
     if "error" in result:
+        ctx.deps.last_render_had_error = True
         return f"Render error: {result['error']}"
+    ctx.deps.last_render_had_error = False
     return "Diagram rendered successfully and is now visible to the user."
 
 
@@ -364,15 +394,15 @@ async def enhance_diagram(
     if not image_b64:
         return "Cannot enhance: no diagram image available."
 
-    result = await _enhance_image_impl(image_b64, instructions=instructions)
+    enhanced = await _enhance_image_impl(image_b64, instructions=instructions)
 
-    if result.get("enhanced_image"):
+    if enhanced:
         await ctx.deps.ws.send_json(
-            {"type": "enhanced_image", "image": result["enhanced_image"]}
+            {"type": "enhanced_image", "image": enhanced}
         )
-        return result.get("explanation", "Enhanced the diagram successfully.")
+        return "Enhanced image generated and sent to the user."
 
-    return result.get("explanation", "No enhancement was needed.")
+    return "Image generation returned no image. Tell the user and suggest they try different instructions."
 
 
 async def _stream_text_handler(
@@ -411,16 +441,11 @@ async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
         user_message = data.get("message", "")
         chart_type = data.get("chart_type")
         current_mermaid_code = data.get("current_mermaid_code")
-
-        user_prompt = ""
-        if chart_type:
-            user_prompt += f"Use the following diagram type: {chart_type}\n\n"
-        if current_mermaid_code:
-            user_prompt += (
-                f"Here is the current diagram code:\n\n"
-                f"```mermaid\n{current_mermaid_code}\n```\n\n"
-            )
-        user_prompt += f"User Request: {user_message}"
+        user_prompt = _build_user_prompt(
+            user_message=user_message,
+            chart_type=chart_type,
+            current_mermaid_code=current_mermaid_code,
+        )
         prompt_parts = [user_prompt]
 
     await deps.ws.send_json({"type": "status", "message": "Thinking..."})
