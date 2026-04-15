@@ -197,23 +197,10 @@ def _parse_follow_ups(text: str) -> tuple[str, list[str]]:
     return explanation, follow_ups
 
 
-def _build_force_enhance_routing_hint(force_enhance: bool) -> str:
-    """Build explicit tool-routing guidance when user forces enhancement."""
-    if force_enhance:
-        return (
-            "Routing directive for this turn: the user explicitly chose Force AI Enhance. "
-            "You MUST call `enhance_diagram` exactly once with the user's request as instructions. "
-            "Do NOT call `render_mermaid_diagram` unless enhancement fails because no diagram is "
-            "available or the enhancement tool reports a hard failure."
-        )
-    return ""
-
-
 def _build_user_prompt(
     user_message: str,
     chart_type: str | None,
     current_mermaid_code: str | None,
-    force_enhance: bool,
 ) -> str:
     """Build a strongly-delimited prompt so the model separates context from request."""
     parts: list[str] = []
@@ -232,14 +219,6 @@ def _build_user_prompt(
             f"{current_mermaid_code}\n"
             "```\n"
             "=== CURRENT_MERMAID_CODE_END ==="
-        )
-
-    routing_hint = _build_force_enhance_routing_hint(force_enhance)
-    if routing_hint:
-        parts.append(
-            "=== ROUTING_DIRECTIVE_START ===\n"
-            f"{routing_hint}\n"
-            "=== ROUTING_DIRECTIVE_END ==="
         )
 
     parts.append(
@@ -479,12 +458,10 @@ async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
         user_message = data.get("message", "")
         chart_type = data.get("chart_type")
         current_mermaid_code = data.get("current_mermaid_code")
-        force_enhance = bool(data.get("force_enhance", False))
         user_prompt = _build_user_prompt(
             user_message=user_message,
             chart_type=chart_type,
             current_mermaid_code=current_mermaid_code,
-            force_enhance=force_enhance,
         )
         prompt_parts = [user_prompt]
 

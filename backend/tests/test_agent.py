@@ -114,23 +114,12 @@ class TestBuildUserPrompt:
             user_message="Improve layout",
             chart_type="flowchart",
             current_mermaid_code="flowchart TD\nA-->B",
-            force_enhance=False,
         )
         assert "=== CHART_TYPE_START ===" in prompt
         assert "=== CURRENT_MERMAID_CODE_START ===" in prompt
         assert "=== CURRENT_MERMAID_CODE_END ===" in prompt
         assert "=== USER_REQUEST_START ===" in prompt
         assert "=== USER_REQUEST_END ===" in prompt
-
-    def test_force_enhance_inserts_routing_directive_block(self):
-        prompt = _build_user_prompt(
-            user_message="Align nodes",
-            chart_type=None,
-            current_mermaid_code="flowchart TD\nA-->B",
-            force_enhance=True,
-        )
-        assert "=== ROUTING_DIRECTIVE_START ===" in prompt
-        assert "MUST call `enhance_diagram` exactly once" in prompt
 
 
 # ── _read_mermaid_syntax_impl ────────────────────────────────────
