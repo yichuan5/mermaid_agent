@@ -197,6 +197,60 @@ def _parse_follow_ups(text: str) -> tuple[str, list[str]]:
     return explanation, follow_ups
 
 
+def _build_force_enhance_routing_hint(force_enhance: bool) -> str:
+    """Build explicit tool-routing guidance when user forces enhancement."""
+    if force_enhance:
+        return (
+            "Routing directive for this turn: the user explicitly chose Force AI Enhance. "
+            "You MUST call `enhance_diagram` exactly once with the user's request as instructions. "
+            "Do NOT call `render_mermaid_diagram` unless enhancement fails because no diagram is "
+            "available or the enhancement tool reports a hard failure."
+        )
+    return ""
+
+
+def _build_user_prompt(
+    user_message: str,
+    chart_type: str | None,
+    current_mermaid_code: str | None,
+    force_enhance: bool,
+) -> str:
+    """Build a strongly-delimited prompt so the model separates context from request."""
+    parts: list[str] = []
+
+    if chart_type:
+        parts.append(
+            "=== CHART_TYPE_START ===\n"
+            f"{chart_type}\n"
+            "=== CHART_TYPE_END ==="
+        )
+
+    if current_mermaid_code:
+        parts.append(
+            "=== CURRENT_MERMAID_CODE_START ===\n"
+            "```mermaid\n"
+            f"{current_mermaid_code}\n"
+            "```\n"
+            "=== CURRENT_MERMAID_CODE_END ==="
+        )
+
+    routing_hint = _build_force_enhance_routing_hint(force_enhance)
+    if routing_hint:
+        parts.append(
+            "=== ROUTING_DIRECTIVE_START ===\n"
+            f"{routing_hint}\n"
+            "=== ROUTING_DIRECTIVE_END ==="
+        )
+
+    parts.append(
+        "=== USER_REQUEST_START ===\n"
+        f"{user_message}\n"
+        "=== USER_REQUEST_END ==="
+    )
+
+    return "\n\n".join(parts)
+
+
 async def _enhance_image_impl(
     image_base64: str,
     instructions: str = "",
@@ -270,6 +324,8 @@ class AgentDeps:
 
     ws: WebSocket
     pending_tools: dict[str, asyncio.Future] = field(default_factory=dict)
+    render_calls: int = 0
+    last_render_had_error: bool = False
 
     async def request_client_tool(self, name: str, args: dict) -> dict:
         """Send a tool request to the frontend and await the result."""
@@ -324,11 +380,11 @@ async def read_mermaid_config(
     return _read_mermaid_config_impl(property_name)
 
 
-@unified_agent.tool
-async def create_mermaid_diagram(
+@unified_agent.tool(name="render_mermaid_diagram")
+async def render_mermaid_diagram(
     ctx: RunContext[AgentDeps], mermaid_code: str
 ) -> str:
-    """Create or modify a Mermaid diagram. Pass the complete Mermaid code.
+    """Render a Mermaid diagram from complete code in the user's browser.
 
     The code is rendered in the user's browser. Returns either:
     - A success confirmation
@@ -336,14 +392,26 @@ async def create_mermaid_diagram(
 
     Only call this tool once per user request unless you get an error back.
     """
+    if ctx.deps.render_calls >= 1 and not ctx.deps.last_render_had_error:
+        logger.warning(
+            "render_mermaid_diagram: blocked repeated render after successful render"
+        )
+        return (
+            "Diagram already rendered successfully for this request. "
+            "Do not call `render_mermaid_diagram` again; continue with explanation only."
+        )
+
     await ctx.deps.ws.send_json(
         {"type": "status", "message": "Rendering diagram…"}
     )
+    ctx.deps.render_calls += 1
     result = await ctx.deps.request_client_tool(
         "render_and_capture", {"mermaid_code": mermaid_code}
     )
     if "error" in result:
+        ctx.deps.last_render_had_error = True
         return f"Render error: {result['error']}"
+    ctx.deps.last_render_had_error = False
     return "Diagram rendered successfully and is now visible to the user."
 
 
@@ -411,16 +479,13 @@ async def run_unified_agent(deps: AgentDeps, data: dict) -> dict:
         user_message = data.get("message", "")
         chart_type = data.get("chart_type")
         current_mermaid_code = data.get("current_mermaid_code")
-
-        user_prompt = ""
-        if chart_type:
-            user_prompt += f"Use the following diagram type: {chart_type}\n\n"
-        if current_mermaid_code:
-            user_prompt += (
-                f"Here is the current diagram code:\n\n"
-                f"```mermaid\n{current_mermaid_code}\n```\n\n"
-            )
-        user_prompt += f"User Request: {user_message}"
+        force_enhance = bool(data.get("force_enhance", False))
+        user_prompt = _build_user_prompt(
+            user_message=user_message,
+            chart_type=chart_type,
+            current_mermaid_code=current_mermaid_code,
+            force_enhance=force_enhance,
+        )
         prompt_parts = [user_prompt]
 
     await deps.ws.send_json({"type": "status", "message": "Thinking..."})
