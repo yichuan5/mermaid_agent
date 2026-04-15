@@ -234,14 +234,14 @@ async def _enhance_image_impl(
     image_base64: str,
     instructions: str = "",
     message: str = "",
-) -> dict:
-    """Call Gemini image generation to enhance a diagram. Shared by REST and WS paths."""
+) -> str | None:
+    """Call Gemini image generation to enhance a diagram. Returns base64 image or None."""
     prompt = ENHANCE_PROMPT + "\n\n"
     if message:
         prompt += f"Original user request: {message}\n\n"
     if instructions:
         prompt += f"Specific enhancement instructions: {instructions}\n\n"
-    prompt += "Here is the rendered diagram to evaluate and potentially enhance:"
+    prompt += "Here is the rendered diagram to enhance:"
 
     image_bytes = base64.b64decode(image_base64)
     image_part = genai_types.Part.from_bytes(data=image_bytes, mime_type="image/png")
@@ -258,38 +258,21 @@ async def _enhance_image_impl(
             model=ENHANCE_MODEL,
             contents=[prompt, image_part],
             config=genai_types.GenerateContentConfig(
-                response_modalities=["TEXT", "IMAGE"],
+                response_modalities=["IMAGE"],
             ),
         )
     except Exception:
         logger.exception("enhance_image: Gemini call failed (model=%s)", ENHANCE_MODEL)
         raise
 
-    enhanced_image_b64 = None
-    explanation = ""
-
     if response.candidates:
-        text_parts: list[str] = []
         for part in response.candidates[0].content.parts:
             if part.inline_data and part.inline_data.mime_type.startswith("image/"):
-                enhanced_image_b64 = base64.b64encode(part.inline_data.data).decode(
-                    "utf-8"
-                )
-            elif part.text:
-                text_parts.append(part.text)
-        explanation = "\n\n".join(text_parts)
+                logger.info("enhance_image: done (enhanced=True)")
+                return base64.b64encode(part.inline_data.data).decode("utf-8")
 
-    if not explanation:
-        explanation = (
-            "Enhanced the diagram." if enhanced_image_b64 else "No enhancement needed."
-        )
-
-    logger.info(
-        "enhance_image: done (enhanced=%s, explanation_len=%d)",
-        enhanced_image_b64 is not None,
-        len(explanation),
-    )
-    return {"enhanced_image": enhanced_image_b64, "explanation": explanation}
+    logger.info("enhance_image: done (enhanced=False)")
+    return None
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -411,15 +394,15 @@ async def enhance_diagram(
     if not image_b64:
         return "Cannot enhance: no diagram image available."
 
-    result = await _enhance_image_impl(image_b64, instructions=instructions)
+    enhanced = await _enhance_image_impl(image_b64, instructions=instructions)
 
-    if result.get("enhanced_image"):
+    if enhanced:
         await ctx.deps.ws.send_json(
-            {"type": "enhanced_image", "image": result["enhanced_image"]}
+            {"type": "enhanced_image", "image": enhanced}
         )
-        return result.get("explanation", "Enhanced the diagram successfully.")
+        return "Enhanced image generated and sent to the user."
 
-    return result.get("explanation", "No enhancement was needed.")
+    return "Image generation returned no image. Tell the user and suggest they try different instructions."
 
 
 async def _stream_text_handler(
